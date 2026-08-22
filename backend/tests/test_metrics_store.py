@@ -268,10 +268,10 @@ def test_bucket_hardware_rows_reports_absent_gpu_as_none():
 
 
 def test_resolve_range_maps_selectors_and_falls_back():
-    assert resolve_range("1h")[2] == 60
-    assert resolve_range("24h")[2] == 15 * 60
-    assert resolve_range("7d")[2] == 60 * 60
-    assert resolve_range("30d")[2] == 6 * 60 * 60
+    assert resolve_range("1h")[2] == 5 * 60
+    assert resolve_range("24h")[2] == 60 * 60
+    assert resolve_range("7d")[2] == 6 * 60 * 60
+    assert resolve_range("30d")[2] == 24 * 60 * 60
     assert resolve_range("nonsense")[0] == "24h"
     assert resolve_range(None)[0] == "24h"
 

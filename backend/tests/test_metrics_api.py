@@ -10,7 +10,7 @@ from app.routers.metrics import (
     get_tasks,
     get_tasks_series,
 )
-from app.services.metrics.store import MetricsStore, TaskRow
+from app.services.metrics.store import MetricsStore, TaskRow, resolve_range
 from app.services.metrics.task_history import task_history
 
 
@@ -127,18 +127,19 @@ async def test_tasks_series_aggregates_recorded_runs(empty_store):
 
     payload = await get_tasks_series(range="1h")
 
-    assert payload["bucket_seconds"] == 60
+    assert payload["bucket_seconds"] == resolve_range("1h")[2]
     assert sum(bucket["count"] for bucket in payload["buckets"]) == 2
     assert all(bucket["gen_tps_p95"] >= bucket["gen_tps_p50"] for bucket in payload["buckets"])
 
 
 @pytest.mark.asyncio
 async def test_tasks_series_buckets_carry_every_aggregate(empty_store):
-    # Anchor both runs inside one 15-minute bucket so the assertion below does
-    # not depend on where "now" happens to sit relative to a bucket boundary.
+    # Anchor both runs inside one bucket so the assertion below does not depend
+    # on where "now" happens to sit relative to a bucket boundary.
+    bucket = resolve_range("24h")[2]
     anchor = datetime.now(timezone.utc) - timedelta(minutes=5)
     floor = anchor - timedelta(
-        seconds=anchor.timestamp() % (15 * 60), microseconds=anchor.microsecond
+        seconds=anchor.timestamp() % bucket, microseconds=anchor.microsecond
     )
     minutes_ago = (datetime.now(timezone.utc) - floor).total_seconds() / 60
     empty_store.insert_tasks([
