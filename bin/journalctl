@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Shim: force user scope for LCC's journalctl calls.
+for arg in "$@"; do
+  if [ "$arg" = "--user" ] || [ "$arg" = "--system" ]; then
+    exec /usr/bin/journalctl "$@"
+  fi
+done
+exec /usr/bin/journalctl --user "$@"
