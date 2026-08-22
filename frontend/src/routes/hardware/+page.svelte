@@ -25,6 +25,8 @@
     taskHistory,
     taskSeries,
     taskSeriesSummary,
+    taskWindow,
+    hardwareWindow,
     timeRange,
     timeSeriesData,
     toggleMetricsPause,
@@ -312,38 +314,38 @@
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div class="xl:col-span-2">
           <ChartPanel title="Generation Speed (mean)" value={$taskSeries.length ? `${rangeLabel($historyRange)} - ${$taskSeries.length} buckets` : 'No runs'}>
-            <SvgLineChart title="Mean generation speed per bucket" values={seriesTpsMean} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} axes interactive showFooter={false} unit=" t/s" color="#d8ff00" heightClass="h-52" />
+            <SvgLineChart title="Mean generation speed per bucket" values={seriesTpsMean} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit=" t/s" color="#d8ff00" heightClass="h-52" />
           </ChartPanel>
         </div>
 
         <ChartPanel title="Generation p50" value={slowestP50 !== null ? `low ${slowestP50.toFixed(1)} t/s` : 'No runs'}>
-          <SvgLineChart title="Median generation speed per bucket" values={seriesTpsP50} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} axes interactive showFooter={false} unit=" t/s" color="#40f078" />
+          <SvgLineChart title="Median generation speed per bucket" values={seriesTpsP50} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit=" t/s" color="#40f078" />
         </ChartPanel>
 
         <ChartPanel title="Generation p95" value={$taskSeriesSummary?.count ? `window ${$taskSeriesSummary.gen_tps_p95.toFixed(1)} t/s` : 'No runs'}>
-          <SvgLineChart title="95th percentile generation speed per bucket" values={seriesTpsP95} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} axes interactive showFooter={false} unit=" t/s" color="#ffb84d" />
+          <SvgLineChart title="95th percentile generation speed per bucket" values={seriesTpsP95} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit=" t/s" color="#ffb84d" />
         </ChartPanel>
 
         <ChartPanel title="TTFT (mean)" value={$taskSeriesSummary?.count ? `${$taskSeriesSummary.ttft_mean.toFixed(2)}s` : 'No runs'}>
-          <SvgLineChart title="Mean time to first token per bucket" values={seriesTtft} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} axes interactive showFooter={false} unit="s" color="#ffb0a8" />
+          <SvgLineChart title="Mean time to first token per bucket" values={seriesTtft} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit="s" color="#ffb0a8" />
         </ChartPanel>
 
         <ChartPanel title="Tokens per Bucket" value={$taskSeriesSummary?.count ? `${$taskSeriesSummary.total_tokens} total` : 'No runs'}>
-          <SvgBarChart title="Total tokens per bucket" values={seriesTokens} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} axes interactive showFooter={false} color="#efff7a" />
+          <SvgBarChart title="Total tokens per bucket" values={seriesTokens} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} color="#efff7a" />
         </ChartPanel>
 
         <ChartPanel title="RAM (mean / peak)" value={hardwareRam.length ? `${hardwareRam.at(-1)?.toFixed(1)}% / ${Math.max(...hardwareRamPeak).toFixed(1)}%` : 'No samples'}>
-          <SvgLineChart title="Mean RAM percentage per bucket" values={hardwareRam} timestamps={hardwareTimestamps} counts={hardwareCounts} {tickFormat} countLabel="sample" axes interactive showFooter={false} yMax={100} unit="%" color="#76a9ff" />
+          <SvgLineChart title="Mean RAM percentage per bucket" values={hardwareRam} timestamps={hardwareTimestamps} counts={hardwareCounts} {tickFormat} countLabel="sample" start={$hardwareWindow.start} end={$hardwareWindow.end} bucketSeconds={$hardwareWindow.bucketSeconds} axes interactive showFooter={false} yMax={100} unit="%" color="#76a9ff" />
         </ChartPanel>
 
         <ChartPanel title="CPU (mean)" value={hardwareCpu.length ? `${hardwareCpu.at(-1)?.toFixed(1)}%` : 'No samples'}>
-          <SvgLineChart title="Mean CPU percentage per bucket" values={hardwareCpu} timestamps={hardwareTimestamps} counts={hardwareCounts} {tickFormat} countLabel="sample" axes interactive showFooter={false} yMax={100} unit="%" color="#40f078" />
+          <SvgLineChart title="Mean CPU percentage per bucket" values={hardwareCpu} timestamps={hardwareTimestamps} counts={hardwareCounts} {tickFormat} countLabel="sample" start={$hardwareWindow.start} end={$hardwareWindow.end} bucketSeconds={$hardwareWindow.bucketSeconds} axes interactive showFooter={false} yMax={100} unit="%" color="#40f078" />
         </ChartPanel>
 
         {#if hardwareGpu.length > 0}
           <div class="xl:col-span-2">
             <ChartPanel title="GPU Load (mean)" value={`${hardwareGpu.at(-1)?.toFixed(1)}%`}>
-              <SvgLineChart title="Mean GPU load per bucket" values={hardwareGpu} timestamps={hardwareGpuTimestamps} counts={hardwareGpuCounts} {tickFormat} countLabel="sample" axes interactive showFooter={false} yMax={100} unit="%" color="#c28cff" heightClass="h-52" />
+              <SvgLineChart title="Mean GPU load per bucket" values={hardwareGpu} timestamps={hardwareGpuTimestamps} counts={hardwareGpuCounts} {tickFormat} countLabel="sample" start={$hardwareWindow.start} end={$hardwareWindow.end} bucketSeconds={$hardwareWindow.bucketSeconds} axes interactive showFooter={false} yMax={100} unit="%" color="#c28cff" heightClass="h-52" />
             </ChartPanel>
           </div>
         {/if}

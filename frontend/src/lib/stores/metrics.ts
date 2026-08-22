@@ -25,6 +25,22 @@ export const historyRange = writable<HistoryRange>('24h');
 export const taskSeries = writable<TaskSeriesBucket[]>([]);
 export const taskSeriesSummary = writable<TaskSeriesSummary | null>(null);
 export const hardwareSeries = writable<HardwareSeriesBucket[]>([]);
+
+/**
+ * The window each series covers, straight from the response. The charts plot
+ * against the requested window rather than the extent of the data, and need
+ * the bucket width to tell an empty stretch from adjacent buckets.
+ */
+export interface SeriesWindow {
+  start: string | null;
+  end: string | null;
+  bucketSeconds: number | null;
+}
+
+const EMPTY_WINDOW: SeriesWindow = { start: null, end: null, bucketSeconds: null };
+
+export const taskWindow = writable<SeriesWindow>(EMPTY_WINDOW);
+export const hardwareWindow = writable<SeriesWindow>(EMPTY_WINDOW);
 export const seriesLoading = writable(false);
 export const seriesLoaded = writable(false);
 
@@ -103,9 +119,12 @@ export async function loadSeries(range?: HistoryRange): Promise<void> {
   const taskData = tasks.status === 'fulfilled' && tasks.value.ok ? tasks.value.data : null;
   taskSeries.set(taskData?.buckets ?? []);
   taskSeriesSummary.set(taskData?.summary ?? null);
-  hardwareSeries.set(
-    hardware.status === 'fulfilled' && hardware.value.ok ? hardware.value.data.buckets : [],
-  );
+  taskWindow.set(toWindow(taskData));
+
+  const hardwareData =
+    hardware.status === 'fulfilled' && hardware.value.ok ? hardware.value.data : null;
+  hardwareSeries.set(hardwareData?.buckets ?? []);
+  hardwareWindow.set(toWindow(hardwareData));
   seriesLoading.set(false);
   seriesLoaded.set(true);
 }
@@ -132,6 +151,8 @@ export async function clearMetricsHistory(): Promise<void> {
     taskSeries.set([]);
     taskSeriesSummary.set(null);
     hardwareSeries.set([]);
+    taskWindow.set(EMPTY_WINDOW);
+    hardwareWindow.set(EMPTY_WINDOW);
     notify.info('Metrics cleared', 'Hardware and task history buffers were cleared.');
   } else {
     notify.error('Clear metrics failed', result.error);
@@ -143,6 +164,17 @@ export function exportTasksCsv(range?: HistoryRange): void {
   anchor.href = api.metrics.tasksCsvUrl(range);
   anchor.download = 'lcc-tasks.csv';
   anchor.click();
+}
+
+function toWindow(
+  data: { start?: string; end?: string; bucket_seconds?: number } | null,
+): SeriesWindow {
+  if (!data) return EMPTY_WINDOW;
+  return {
+    start: data.start ?? null,
+    end: data.end ?? null,
+    bucketSeconds: data.bucket_seconds ?? null,
+  };
 }
 
 function parseMetricTimestamp(value: string): number {
