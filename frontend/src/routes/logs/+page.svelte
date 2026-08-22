@@ -16,6 +16,7 @@
     historyRange,
     HISTORY_RANGES,
     loadSeries,
+    rangeTickFormat,
     seriesLoading,
     setHistoryRange,
     taskSeries,
@@ -73,18 +74,22 @@
     loadSeries();
   });
 
+  function refreshRange() {
+    refreshLogs();
+    loadSeries();
+  }
+
   // Compact generation-speed trend over the selected long-run window. The
   // buckets come from the persisted history, so it survives restarts and
   // covers time nobody had this page open.
   $: trendValues = $taskSeries.map((bucket) => bucket.gen_tps_mean);
-  $: trendLabels = $taskSeries.map((bucket) => formatBucket(bucket.t));
+  $: trendTimestamps = $taskSeries.map((bucket) => bucket.t);
+  $: trendCounts = $taskSeries.map((bucket) => bucket.count);
+  $: tickFormat = rangeTickFormat($historyRange);
+  $: hasRangeData = ($taskSeriesSummary?.count ?? 0) > 0;
 
-  function formatBucket(value: string): string {
-    const moment = new Date(value);
-    if ($historyRange === '1h' || $historyRange === '24h') {
-      return moment.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    }
-    return moment.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  function rangeTps(value: number | undefined): string {
+    return hasRangeData && typeof value === 'number' ? formatTPS(value) : '--';
   }
 
   $: filteredLogs = logs.filter((entry) => {
@@ -193,8 +198,21 @@
           Logs
         </button>
       </div>
-      <button class="ops-button" type="button" on:click={refreshLogs} disabled={loading}>
-        <RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
+      {#if activePanel === 'stats'}
+        <div class="flex gap-1 rounded border border-[#444936] bg-[#2b2d2a] p-1">
+          {#each HISTORY_RANGES as range}
+            <button
+              class="rounded px-3 py-2 ops-mono text-xs {$historyRange === range ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
+              type="button"
+              on:click={() => setHistoryRange(range)}
+            >
+              {range}
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <button class="ops-button" type="button" on:click={refreshRange} disabled={loading || $seriesLoading}>
+        <RefreshCw class="h-4 w-4 {loading || $seriesLoading ? 'animate-spin' : ''}" />
         Refresh
       </button>
     </div>
@@ -205,14 +223,20 @@
   {/if}
 
   {#if activePanel === 'stats'}
-    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <section class="space-y-4">
+      <div class="flex items-baseline justify-between gap-4 border-b border-[#34382d] pb-2">
+        <h2 class="ops-title">Last task</h2>
+        <p class="ops-subtitle">The single most recent inference, as parsed from the journal.</p>
+      </div>
+
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
       <article class="ops-card p-5">
         <div class="flex justify-between">
           <span class="ops-label">Input Tokens</span>
           <Activity class="h-4 w-4 text-muted-foreground" />
         </div>
         <p class="mt-5 ops-value text-3xl font-bold">{metricNumber(lastTask?.input_tokens)}</p>
-        <p class="mt-4 text-sm text-muted-foreground">Last Task</p>
+        <p class="mt-4 text-sm text-muted-foreground">Prompt size</p>
       </article>
       <article class="ops-card p-5">
         <div class="flex justify-between">
@@ -220,7 +244,7 @@
           <Activity class="h-4 w-4 text-muted-foreground" />
         </div>
         <p class="mt-5 ops-value text-3xl font-bold">{metricNumber(lastTask?.output_tokens)}</p>
-        <p class="mt-4 text-sm text-muted-foreground">Last Task</p>
+        <p class="mt-4 text-sm text-muted-foreground">Generated</p>
       </article>
       <article class="ops-card p-5">
         <div class="flex justify-between">
@@ -236,60 +260,11 @@
           <TimerReset class="h-4 w-4 text-muted-foreground" />
         </div>
         <p class="mt-5 ops-value text-3xl font-bold">{durationMs(lastTask?.total_duration_seconds)}</p>
-        <p class="mt-4 text-sm text-muted-foreground">Last Task</p>
+        <p class="mt-4 text-sm text-muted-foreground">Wall clock</p>
       </article>
-    </section>
-
-    <section class="ops-panel">
-      <div class="ops-card-header flex-wrap gap-3">
-        <div class="flex items-center gap-3">
-          <Gauge class="h-5 w-5 text-muted-foreground" />
-          <h2 class="text-lg font-bold">Generation Speed Trend</h2>
-        </div>
-        <div class="flex items-center gap-3">
-          <span class="ops-muted text-sm">
-            mean <span class="ops-value">{$taskSeriesSummary?.count ? formatTPS($taskSeriesSummary.gen_tps_mean) : '--'}</span>
-          </span>
-          <span class="ops-muted text-sm">
-            p95 <span class="ops-value">{$taskSeriesSummary?.count ? formatTPS($taskSeriesSummary.gen_tps_p95) : '--'}</span>
-          </span>
-          <div class="flex gap-1 rounded border border-[#444936] bg-[#2b2d2a] p-1">
-            {#each HISTORY_RANGES as range}
-              <button
-                class="rounded px-2.5 py-1.5 ops-mono text-xs {$historyRange === range ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
-                type="button"
-                on:click={() => setHistoryRange(range)}
-              >
-                {range}
-              </button>
-            {/each}
-          </div>
-        </div>
       </div>
-      <div class="p-5">
-        {#if $seriesLoading && trendValues.length === 0}
-          <p class="text-sm text-muted-foreground">Loading trend...</p>
-        {:else if trendValues.length === 0}
-          <p class="text-sm text-muted-foreground">
-            No runs recorded in the last {$historyRange}. History accrues in the background
-            as the server completes inferences.
-          </p>
-        {:else}
-          <SvgLineChart
-            title="Mean generation speed per bucket"
-            values={trendValues}
-            labels={trendLabels}
-            unit=" t/s"
-            heightClass="h-20"
-          />
-          <p class="mt-2 text-xs text-muted-foreground">
-            {$taskSeriesSummary?.count ?? 0} runs across {trendValues.length} buckets
-          </p>
-        {/if}
-      </div>
-    </section>
 
-    <section class="grid grid-cols-1 gap-4 xl:grid-cols-[2fr_1fr]">
+    <div class="grid grid-cols-1 gap-4 xl:grid-cols-[2fr_1fr]">
       <article class="ops-panel">
         <div class="ops-card-header justify-start gap-3">
           <Gauge class="h-5 w-5 text-muted-foreground" />
@@ -327,6 +302,81 @@
               {lastTask?.finish_reason?.evidence || 'Unavailable'}
             </div>
           </div>
+        </div>
+      </article>
+      </div>
+    </section>
+
+    <section class="space-y-4">
+      <div class="flex items-baseline justify-between gap-4 border-b border-[#34382d] pb-2">
+        <h2 class="ops-title">Over the selected range</h2>
+        <p class="ops-subtitle">
+          Every run recorded in the last {$historyRange}, aggregated from the persisted history.
+        </p>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+        <article class="ops-card p-4">
+          <span class="ops-label">Runs</span>
+          <p class="mt-3 ops-value text-2xl font-bold">{$taskSeriesSummary?.count ?? 0}</p>
+        </article>
+        <article class="ops-card p-4">
+          <span class="ops-label">Gen Mean</span>
+          <p class="mt-3 ops-value text-2xl font-bold">{rangeTps($taskSeriesSummary?.gen_tps_mean)}</p>
+        </article>
+        <article class="ops-card p-4">
+          <span class="ops-label">Gen p50</span>
+          <p class="mt-3 ops-value text-2xl font-bold">{rangeTps($taskSeriesSummary?.gen_tps_p50)}</p>
+        </article>
+        <article class="ops-card p-4">
+          <span class="ops-label">Gen p95</span>
+          <p class="mt-3 ops-value text-2xl font-bold">{rangeTps($taskSeriesSummary?.gen_tps_p95)}</p>
+        </article>
+        <article class="ops-card p-4">
+          <span class="ops-label">Mean TTFT</span>
+          <p class="mt-3 ops-value text-2xl font-bold">
+            {hasRangeData ? durationMs($taskSeriesSummary?.ttft_mean) : '--'}
+          </p>
+        </article>
+        <article class="ops-card p-4">
+          <span class="ops-label">Total Tokens</span>
+          <p class="mt-3 ops-value text-2xl font-bold">
+            {hasRangeData ? formatNumber($taskSeriesSummary?.total_tokens ?? 0) : '--'}
+          </p>
+        </article>
+      </div>
+
+      <article class="ops-panel">
+        <div class="ops-card-header justify-start gap-3">
+          <Gauge class="h-5 w-5 text-muted-foreground" />
+          <h2 class="text-lg font-bold">Generation Speed Trend</h2>
+        </div>
+        <div class="p-5">
+          {#if $seriesLoading && trendValues.length === 0}
+            <p class="text-sm text-muted-foreground">Loading trend...</p>
+          {:else if trendValues.length === 0}
+            <p class="text-sm text-muted-foreground">
+              No runs recorded in the last {$historyRange}. History accrues in the background
+              as the server completes inferences.
+            </p>
+          {:else}
+            <SvgLineChart
+              title="Mean generation speed per bucket"
+              values={trendValues}
+              timestamps={trendTimestamps}
+              counts={trendCounts}
+              unit=" t/s"
+              {tickFormat}
+              heightClass="h-40"
+              axes
+              interactive
+              showFooter={false}
+            />
+            <p class="mt-2 text-xs text-muted-foreground">
+              {$taskSeriesSummary?.count ?? 0} runs across {trendValues.length} buckets.
+              Hover, tap or focus the chart and use the arrow keys to inspect a bucket.
+            </p>
+          {/if}
         </div>
       </article>
     </section>
