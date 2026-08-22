@@ -44,10 +44,14 @@ RE_SLOT_RELEASED = re.compile(r"slot\s+(?:released|freed)", re.IGNORECASE)
 RE_SLOT_PROCESSING = re.compile(r"slot\s+(?:is\s+)?processing", re.IGNORECASE)
 RE_SLOT_TRUNCATED = re.compile(r"truncated\s*=\s*(\d+)", re.IGNORECASE)
 
-RE_TELEMETRY_INPUT = re.compile(r"\bInput tokens:\s*(\d+)", re.IGNORECASE)
-RE_TELEMETRY_OUTPUT = re.compile(r"\bOutput tokens:\s*(\d+)", re.IGNORECASE)
-RE_TELEMETRY_TTFT = re.compile(r"\bTTFT\s*\(s\):\s*([\d.]+)", re.IGNORECASE)
-RE_TELEMETRY_TPS = re.compile(r"\bTPS:\s*([\d.]+)", re.IGNORECASE)
+RE_TELEMETRY_INPUT = re.compile(
+    r"(?:\bInput tokens:\s*|\bin=)(\d+)", re.IGNORECASE)
+RE_TELEMETRY_OUTPUT = re.compile(
+    r"(?:\bOutput tokens:\s*|\bout=)(\d+)", re.IGNORECASE)
+RE_TELEMETRY_TTFT = re.compile(
+    r"(?:\bTTFT\s*\(s\):\s*|\bttft=)([\d.]+)", re.IGNORECASE)
+RE_TELEMETRY_TPS = re.compile(
+    r"(?:\bTPS:\s*|\btps=)([\d.]+)", re.IGNORECASE)
 
 RE_MODEL_LOADED = re.compile(r"model\s+loaded|all\s+slots\s+are\s+idle", re.IGNORECASE)
 
@@ -239,6 +243,21 @@ def parse_last_task(
 
     if stats.ttft_seconds is None and stats.prompt_eval_tps and stats.input_tokens:
         stats.ttft_seconds = round(stats.input_tokens / stats.prompt_eval_tps, 2)
+
+    # Lemonade 11.7's single-line telemetry carries no prompt-eval rate. Derive it
+    # from the numbers it does report - the same relationship the branch above
+    # assumes in reverse. ttft includes queueing, so this reads slightly low: it
+    # is an estimate, not a measurement.
+    if stats.prompt_eval_tps is None and stats.ttft_seconds and stats.input_tokens:
+        stats.prompt_eval_tps = round(stats.input_tokens / stats.ttft_seconds, 2)
+
+    # Same story for wall-clock duration: ttft covers everything up to the first
+    # token, the rest arrives at the measured generation rate. Estimate, not a
+    # measurement - it excludes teardown after the last token.
+    if (stats.total_duration_seconds is None and stats.ttft_seconds
+            and stats.output_tokens and stats.generation_tps):
+        stats.total_duration_seconds = round(
+            stats.ttft_seconds + stats.output_tokens / stats.generation_tps, 1)
 
     stats.finish_reason = _infer_finish_reason(stats, configured_max_tokens)
 
