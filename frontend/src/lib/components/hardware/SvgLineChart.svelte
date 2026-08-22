@@ -1,10 +1,13 @@
 <script lang="ts">
   import {
-    formatAxisLabel,
     formatTick,
     formatTooltipTimestamp,
     formatValue,
+    inferBucketMs,
+    nearestTimeIndex,
     niceScale,
+    timeSegments,
+    timeTicks,
     xTicks,
     xTickTarget,
     type TickFormat,
@@ -23,11 +26,14 @@
   // Everything below defaults off, so the existing callers keep rendering the
   // plain sparkline they render today.
 
-  /** Draw a labelled zero-based y axis and evenly spaced x ticks. */
+  /** Draw a labelled zero-based y axis and x ticks. */
   export let axes = false;
   /** Enable crosshair, tooltip, keyboard traversal and tap-to-inspect. */
   export let interactive = false;
-  /** ISO timestamp per point, driving tick and tooltip formatting. */
+  /**
+   * ISO timestamp per point. Supplying one per value switches the x axis from
+   * index positions to a linear time scale.
+   */
   export let timestamps: string[] = [];
   /** Runs behind each point, reported in the tooltip. */
   export let counts: number[] = [];
@@ -35,9 +41,20 @@
   export let tickFormat: TickFormat = 'time';
   /** What `counts` counts, singular. Task buckets hold runs, hardware samples. */
   export let countLabel = 'run';
+  /**
+   * Requested window. The domain is the window the user asked for, not the
+   * extent of the data, so a range whose only activity is in its last hour
+   * shows that hour at the right edge with empty space before it.
+   */
+  export let start: string | null = null;
+  export let end: string | null = null;
+  /**
+   * Server bucket width. Used to tell a real gap from adjacent buckets;
+   * inferred from the timestamps when absent.
+   */
+  export let bucketSeconds: number | null = null;
 
   let plotBox: HTMLDivElement;
-  let svgElement: SVGSVGElement;
   let activeIndex: number | null = null;
   let pointerInside = false;
 
@@ -51,6 +68,26 @@
   // Empty ranges get no handlers at all, per the brief.
   $: interactiveNow = interactive && hasData;
 
+  // ── Time scale ──
+  $: times = timestamps.map((value) => Date.parse(value));
+  // Callers that pass no timestamps keep the original index positioning.
+  $: useTimeAxis =
+    hasData && times.length === values.length && times.every((time) => Number.isFinite(time));
+
+  $: domainStart = useTimeAxis ? (parseBoundary(start) ?? times[0]) : 0;
+  $: domainEnd = useTimeAxis ? (parseBoundary(end) ?? times[times.length - 1]) : 1;
+  // A zero-width domain (one bucket, no window given) would divide by zero;
+  // fall back to the bucket width so the single point lands mid-plot.
+  $: domainSpan = domainEnd > domainStart ? domainEnd - domainStart : 0;
+
+  $: bucketMs = bucketSeconds && bucketSeconds > 0 ? bucketSeconds * 1000 : inferBucketMs(times);
+  // Index mode has no notion of a gap, so it stays one unbroken run.
+  $: segments = useTimeAxis
+    ? timeSegments(times, bucketMs)
+    : hasData
+      ? [values.map((_, index) => index)]
+      : [];
+
   // Axis gutters only where there are labels to fit; the sparkline keeps the
   // symmetric padding it has always used.
   $: padLeft = showAxes ? 46 : 18;
@@ -63,17 +100,20 @@
   $: plotWidth = Math.max(width - padLeft - padRight, 1);
   $: plotHeight = Math.max(height - padTop - padBottom, 1);
 
-  $: dataMax = values.length ? Math.max(0, ...values) : 0;
+  $: dataMax = hasData ? Math.max(0, ...values) : 0;
   $: scale = niceScale(yMax ?? dataMax, 4);
   // An explicit yMax stays the ceiling. Without one, the axis rounds up to a
   // tidy gridline -- but only when axes are drawn, so the plain sparkline keeps
   // scaling to the raw maximum exactly as it always has.
   $: axisMax = yMax && yMax > 0 ? yMax : showAxes ? Math.max(scale.max, 1) : Math.max(1, dataMax);
   $: gridTicks = showAxes ? scale.ticks.filter((tick) => tick <= axisMax) : [];
-  $: xAxisTicks = showAxes ? xTicks(values.length, xTickTarget(plotWidth)) : [];
+
+  $: tickTarget = xTickTarget(plotWidth);
+  $: axisTimeTicks =
+    showAxes && useTimeAxis ? timeTicks(domainStart, domainEnd, tickTarget, tickFormat) : [];
+  $: axisIndexTicks = showAxes && !useTimeAxis ? xTicks(values.length, tickTarget) : [];
 
   $: lastIndex = values.length - 1;
-  $: points = values.map((value, index) => `${pointX(index)},${pointY(value)}`).join(' ');
   $: latest = values.at(-1);
 
   $: activeValue = activeIndex === null ? undefined : values[activeIndex];
@@ -92,11 +132,27 @@
   // Announced to screen readers as the selection moves.
   $: liveDescription =
     activeIndex !== null && activeValue !== undefined
-      ? `${title}. ${activeLabel}: ${formatValue(activeValue, unit)}${activeCount !== undefined ? `, ${activeCount} ${activeCount === 1 ? countLabel : countLabel + 's'}` : ''}`
+      ? `${title}. ${activeLabel}: ${formatValue(activeValue, unit)}${activeCount !== undefined ? `, ${activeCount} ${activeCount === 1 ? countLabel : `${countLabel}s`}` : ''}`
       : `${title}. Use arrow keys to inspect data points.`;
 
+  function parseBoundary(value: string | null): number | null {
+    if (!value) return null;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  /** Map epoch milliseconds onto the plot. */
+  function timeX(time: number): number {
+    if (domainSpan <= 0) return padLeft + plotWidth / 2;
+    const ratio = (time - domainStart) / domainSpan;
+    return padLeft + Math.min(Math.max(ratio, 0), 1) * plotWidth;
+  }
+
   function pointX(index: number): number {
-    return values.length <= 1 ? padLeft + plotWidth / 2 : padLeft + (index / (values.length - 1)) * plotWidth;
+    if (useTimeAxis) return timeX(times[index]);
+    return values.length <= 1
+      ? padLeft + plotWidth / 2
+      : padLeft + (index / (values.length - 1)) * plotWidth;
   }
 
   function pointY(value: number): number {
@@ -104,13 +160,22 @@
     return padTop + plotHeight - (clamped / axisMax) * plotHeight;
   }
 
+  function segmentPoints(segment: number[]): string {
+    return segment.map((index) => `${pointX(index)},${pointY(values[index])}`).join(' ');
+  }
+
   function nearestIndex(clientX: number): number {
     if (values.length <= 1) return 0;
-    const bounds = (plotBox ?? svgElement)?.getBoundingClientRect();
+    const bounds = plotBox?.getBoundingClientRect();
     if (!bounds || bounds.width === 0) return 0;
     // The viewBox is 1:1 with the box, but guard against a CSS transform.
     const viewX = ((clientX - bounds.left) * width) / bounds.width;
     const ratio = (viewX - padLeft) / plotWidth;
+    if (useTimeAxis) {
+      // Snap in time space: with gaps present, index space no longer matches
+      // what the reader sees under the pointer.
+      return nearestTimeIndex(times, domainStart + Math.min(Math.max(ratio, 0), 1) * domainSpan);
+    }
     return Math.min(Math.max(Math.round(ratio * lastIndex), 0), lastIndex);
   }
 
@@ -129,6 +194,8 @@
 
   function handleKeydown(event: KeyboardEvent) {
     if (!interactiveNow) return;
+    // Arrow keys walk real data points, so an empty stretch is stepped over
+    // rather than traversed.
     let next = activeIndex;
     if (event.key === 'ArrowRight') next = activeIndex === null ? 0 : Math.min(activeIndex + 1, lastIndex);
     else if (event.key === 'ArrowLeft') next = activeIndex === null ? lastIndex : Math.max(activeIndex - 1, 0);
@@ -175,7 +242,6 @@
     on:blur={handleBlur}
   >
     <svg
-      bind:this={svgElement}
       class="h-full w-full"
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
@@ -202,7 +268,28 @@
           </text>
         {/each}
 
-        {#each xAxisTicks as tick}
+        {#each axisTimeTicks as tick}
+          <line
+            x1={timeX(tick.time)}
+            y1={padTop + plotHeight}
+            x2={timeX(tick.time)}
+            y2={padTop + plotHeight + 4}
+            stroke="#3f432d"
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
+          <text
+            x={timeX(tick.time)}
+            y={padTop + plotHeight + 17}
+            text-anchor="middle"
+            font-size="10"
+            fill="#8b9178"
+          >
+            {tick.label}
+          </text>
+        {/each}
+
+        {#each axisIndexTicks as tick}
           <line
             x1={pointX(tick.position)}
             y1={padTop + plotHeight}
@@ -219,7 +306,7 @@
             font-size="10"
             fill="#8b9178"
           >
-            {timestamps[tick.index] ? formatAxisLabel(timestamps[tick.index], tickFormat) : (labels[tick.index] ?? '')}
+            {labels[tick.index] ?? ''}
           </text>
         {/each}
 
@@ -231,12 +318,22 @@
         <line x1={padLeft} y1={padTop} x2={padLeft} y2={height - padBottom} stroke="#3f432d" stroke-width="1" />
       {/if}
 
-      {#if values.length > 1}
-        <polyline points={points} fill="none" stroke={color} stroke-width="2.5" vector-effect="non-scaling-stroke" />
-      {:else if values.length === 1}
-        <!-- A single bucket has no line to draw, so mark the point itself. -->
-        <circle cx={pointX(0)} cy={pointY(values[0])} r="3" fill={color} />
-      {/if}
+      <!-- One polyline per run of consecutive buckets: a gap in the data is
+           left as a gap rather than bridged by an invented segment. A run of a
+           single bucket has no line to draw, so it is marked with a dot. -->
+      {#each segments as segment}
+        {#if segment.length > 1}
+          <polyline
+            points={segmentPoints(segment)}
+            fill="none"
+            stroke={color}
+            stroke-width="2.5"
+            vector-effect="non-scaling-stroke"
+          />
+        {:else if segment.length === 1}
+          <circle cx={pointX(segment[0])} cy={pointY(values[segment[0]])} r="3" fill={color} />
+        {/if}
+      {/each}
 
       {#if interactiveNow && activeIndex !== null && activeValue !== undefined}
         <line

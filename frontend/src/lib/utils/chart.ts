@@ -69,6 +69,136 @@ export interface XTick {
   index: number;
 }
 
+export interface TimeTick {
+  /** Epoch milliseconds of the tick. */
+  time: number;
+  /** Preformatted label for the tick. */
+  label: string;
+}
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/**
+ * Candidate tick spacings, all of them values a reader recognises as round.
+ * Anything not listed (7 minutes, 5 hours) would put labels on times nobody
+ * thinks in.
+ */
+const TIME_STEPS = [
+  MINUTE, 2 * MINUTE, 5 * MINUTE, 10 * MINUTE, 15 * MINUTE, 30 * MINUTE,
+  HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR,
+  DAY, 2 * DAY, 7 * DAY, 14 * DAY, 28 * DAY,
+];
+
+/**
+ * Finest round step whose tick count still fits the target.
+ *
+ * Dividing by target + 1 rather than target picks the denser of two candidate
+ * steps, which keeps a 1-hour window on 10-minute ticks instead of dropping to
+ * four. Round boundaries win over hitting the target exactly: no round step
+ * divides a 7-day span into five, so that range settles on four 2-day ticks.
+ */
+function pickTimeStep(spanMs: number, target: number): number {
+  const wanted = spanMs / Math.max(2, target + 1);
+  return TIME_STEPS.find((step) => step >= wanted) ?? TIME_STEPS[TIME_STEPS.length - 1];
+}
+
+/** Local midnight on the day containing `time`. */
+function startOfLocalDay(time: number): Date {
+  const day = new Date(time);
+  day.setHours(0, 0, 0, 0);
+  return day;
+}
+
+/**
+ * Ticks on round wall-clock boundaries across a time domain.
+ *
+ * Sub-day steps are anchored to local midnight, so a 6-hour step lands on
+ * 00:00 / 06:00 / 12:00 / 18:00 rather than on an arbitrary offset from the
+ * window edge. Day-or-larger steps advance by calendar date, which keeps them
+ * on midnight across a DST change instead of drifting an hour.
+ */
+export function timeTicks(
+  startMs: number,
+  endMs: number,
+  target: number,
+  format: TickFormat,
+): TimeTick[] {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return [];
+
+  const step = pickTimeStep(endMs - startMs, target);
+  const ticks: TimeTick[] = [];
+
+  if (step >= DAY) {
+    const days = Math.round(step / DAY);
+    const cursor = startOfLocalDay(startMs);
+    if (cursor.getTime() < startMs) cursor.setDate(cursor.getDate() + days);
+    while (cursor.getTime() <= endMs && ticks.length < 24) {
+      ticks.push({ time: cursor.getTime(), label: formatAxisLabel(cursor.toISOString(), format) });
+      cursor.setDate(cursor.getDate() + days);
+    }
+    return ticks;
+  }
+
+  const anchor = startOfLocalDay(startMs).getTime();
+  let time = anchor + Math.ceil((startMs - anchor) / step) * step;
+  while (time <= endMs && ticks.length < 24) {
+    ticks.push({ time, label: formatAxisLabel(new Date(time).toISOString(), format) });
+    time += step;
+  }
+  return ticks;
+}
+
+/**
+ * Split a series into runs of consecutive buckets.
+ *
+ * The series omits empty buckets, so a gap in the data is a jump in the
+ * timestamps. Drawing straight through such a jump would invent a trend across
+ * time when nothing ran; each run is drawn separately instead. The 1.5x
+ * tolerance absorbs the sub-second jitter in bucket boundaries.
+ */
+export function timeSegments(times: number[], bucketMs: number): number[][] {
+  if (times.length === 0) return [];
+  const limit = bucketMs > 0 ? bucketMs * 1.5 : Number.POSITIVE_INFINITY;
+  const segments: number[][] = [[0]];
+  for (let index = 1; index < times.length; index += 1) {
+    if (times[index] - times[index - 1] > limit) segments.push([index]);
+    else segments[segments.length - 1].push(index);
+  }
+  return segments;
+}
+
+/**
+ * Infer the bucket width from the closest pair of timestamps.
+ *
+ * Only a fallback: callers that know the server's bucket_seconds should pass
+ * it, because a series whose buckets are all isolated has no pair to measure.
+ */
+export function inferBucketMs(times: number[]): number {
+  let smallest = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < times.length; index += 1) {
+    const delta = times[index] - times[index - 1];
+    if (delta > 0 && delta < smallest) smallest = delta;
+  }
+  return Number.isFinite(smallest) ? smallest : 0;
+}
+
+/** Index of the point closest in time to `target`. */
+export function nearestTimeIndex(times: number[], target: number): number {
+  if (times.length === 0) return 0;
+  let best = 0;
+  let bestDistance = Math.abs(times[0] - target);
+  for (let index = 1; index < times.length; index += 1) {
+    const distance = Math.abs(times[index] - target);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  }
+  return best;
+}
+
 /**
  * How many x ticks the available width can hold without labels colliding.
  *

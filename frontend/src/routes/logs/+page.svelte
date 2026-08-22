@@ -21,6 +21,7 @@
     setHistoryRange,
     taskSeries,
     taskSeriesSummary,
+    taskWindow,
   } from '$lib/stores/metrics';
 
   interface FinishReason {
@@ -367,6 +368,9 @@
               counts={trendCounts}
               unit=" t/s"
               {tickFormat}
+              start={$taskWindow.start}
+              end={$taskWindow.end}
+              bucketSeconds={$taskWindow.bucketSeconds}
               heightClass="h-40"
               axes
               interactive
