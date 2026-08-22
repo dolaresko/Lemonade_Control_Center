@@ -9,28 +9,46 @@
     connectMetricsWs,
     disconnectMetricsWs,
     exportTasksCsv,
+    hardwareSeries,
+    historyRange,
+    HISTORY_RANGES,
     loadMetrics,
+    loadSeries,
     metricsLoading,
     metricsPaused,
     metricsWsConnected,
+    seriesLoaded,
+    seriesLoading,
+    setHistoryRange,
     setTimeRange,
     taskHistory,
+    taskSeries,
+    taskSeriesSummary,
     timeRange,
     timeSeriesData,
     toggleMetricsPause,
   } from '$lib/stores/metrics';
-  import type { MetricPoint, TimeRange } from '$lib/types';
+  import type { HistoryRange, MetricPoint, TimeRange } from '$lib/types';
   import type { TelemetrySnapshot } from '$lib/types';
   import { api } from '$lib/api/client';
 
   const ranges: TimeRange[] = [5, 15, 30];
   let telemetry: TelemetrySnapshot | null = null;
 
+  // The live stream stays the default view; long-run history is opt-in and
+  // only fetches its series the first time it is opened.
+  let view: 'live' | 'history' = 'live';
+
   onMount(() => {
     loadMetrics();
     connectMetricsWs();
     loadTelemetryProviders();
   });
+
+  function showHistory() {
+    view = 'history';
+    if (!$seriesLoaded) loadSeries();
+  }
 
   async function loadTelemetryProviders() {
     const result = await api.system.telemetry();
@@ -52,6 +70,41 @@
   $: ttftValues = $taskHistory.map((task) => task.ttft_seconds);
   $: throughputValues = $taskHistory.map((task) => task.output_tokens);
   $: taskLabels = $taskHistory.map((task) => new Date(task.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
+  // ── Long-run series ──
+  $: seriesLabels = $taskSeries.map((bucket) => formatBucket(bucket.t));
+  $: seriesTpsMean = $taskSeries.map((bucket) => bucket.gen_tps_mean);
+  $: seriesTpsP50 = $taskSeries.map((bucket) => bucket.gen_tps_p50);
+  $: seriesTpsP95 = $taskSeries.map((bucket) => bucket.gen_tps_p95);
+  $: seriesTtft = $taskSeries.map((bucket) => bucket.ttft_mean);
+  $: seriesTokens = $taskSeries.map((bucket) => bucket.total_tokens);
+  $: seriesRuns = $taskSeries.reduce((total, bucket) => total + bucket.count, 0);
+
+  $: hardwareLabels = $hardwareSeries.map((bucket) => formatBucket(bucket.t));
+  $: hardwareRam = $hardwareSeries.map((bucket) => bucket.ram_percent);
+  $: hardwareRamPeak = $hardwareSeries.map((bucket) => bucket.ram_percent_max);
+  $: hardwareCpu = $hardwareSeries.map((bucket) => bucket.cpu_percent);
+  $: hardwareGpu = $hardwareSeries
+    .map((bucket) => bucket.gpu_load_percent)
+    .filter((value): value is number => typeof value === 'number');
+
+  /** The slowest bucket in the window: the dip a trend view exists to surface. */
+  function slowestP50(): number | null {
+    if ($taskSeries.length === 0) return null;
+    return Math.min(...$taskSeries.map((bucket) => bucket.gen_tps_p50));
+  }
+
+  function formatBucket(value: string): string {
+    const moment = new Date(value);
+    if ($historyRange === '1h' || $historyRange === '24h') {
+      return moment.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return moment.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+
+  function rangeLabel(range: HistoryRange): string {
+    return { '1h': '1h', '24h': '24h', '7d': '7d', '30d': '30d' }[range];
+  }
 
   function latest(points: MetricPoint[]): MetricPoint | null {
     return points.at(-1) ?? null;
@@ -83,24 +136,60 @@
     </div>
     <div class="flex flex-wrap gap-2">
       <div class="flex gap-1 rounded border border-[#444936] bg-[#2b2d2a] p-1">
-        {#each ranges as range}
-          <button
-            class="rounded px-3 py-2 ops-mono text-xs {$timeRange === range ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
-            type="button"
-            on:click={() => setTimeRange(range)}
-          >
-            {range}m
-          </button>
-        {/each}
+        <button
+          class="rounded px-3 py-2 text-xs {view === 'live' ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
+          type="button"
+          on:click={() => (view = 'live')}
+        >
+          Live
+        </button>
+        <button
+          class="rounded px-3 py-2 text-xs {view === 'history' ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
+          type="button"
+          on:click={showHistory}
+        >
+          History
+        </button>
       </div>
-      <button class="ops-button" type="button" on:click={toggleMetricsPause}>
-        {#if $metricsPaused}<Play class="h-4 w-4" /> Resume{:else}<Pause class="h-4 w-4" /> Pause{/if}
-      </button>
-      <button class="ops-button" type="button" on:click={loadMetrics} disabled={$metricsLoading}>
-        <RefreshCw class="h-4 w-4 {$metricsLoading ? 'animate-spin' : ''}" />
-        Refresh
-      </button>
-      <button class="ops-button" type="button" on:click={exportTasksCsv}>
+
+      {#if view === 'live'}
+        <div class="flex gap-1 rounded border border-[#444936] bg-[#2b2d2a] p-1">
+          {#each ranges as range}
+            <button
+              class="rounded px-3 py-2 ops-mono text-xs {$timeRange === range ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
+              type="button"
+              on:click={() => setTimeRange(range)}
+            >
+              {range}m
+            </button>
+          {/each}
+        </div>
+        <button class="ops-button" type="button" on:click={toggleMetricsPause}>
+          {#if $metricsPaused}<Play class="h-4 w-4" /> Resume{:else}<Pause class="h-4 w-4" /> Pause{/if}
+        </button>
+        <button class="ops-button" type="button" on:click={loadMetrics} disabled={$metricsLoading}>
+          <RefreshCw class="h-4 w-4 {$metricsLoading ? 'animate-spin' : ''}" />
+          Refresh
+        </button>
+      {:else}
+        <div class="flex gap-1 rounded border border-[#444936] bg-[#2b2d2a] p-1">
+          {#each HISTORY_RANGES as range}
+            <button
+              class="rounded px-3 py-2 ops-mono text-xs {$historyRange === range ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
+              type="button"
+              on:click={() => setHistoryRange(range)}
+            >
+              {rangeLabel(range)}
+            </button>
+          {/each}
+        </div>
+        <button class="ops-button" type="button" on:click={() => loadSeries()} disabled={$seriesLoading}>
+          <RefreshCw class="h-4 w-4 {$seriesLoading ? 'animate-spin' : ''}" />
+          Refresh
+        </button>
+      {/if}
+
+      <button class="ops-button" type="button" on:click={() => exportTasksCsv(view === 'history' ? $historyRange : undefined)}>
         <Download class="h-4 w-4" />
         Export CSV
       </button>
@@ -113,9 +202,16 @@
 
   <section class="ops-panel px-4 py-3">
     <div class="flex flex-wrap gap-x-8 gap-y-2 text-sm">
-      <span class="ops-muted">Stream: <span class="ops-value {$metricsWsConnected ? 'text-status-ok' : 'text-status-warn'}">{$metricsWsConnected ? 'live' : 'offline'}</span></span>
-      <span class="ops-muted">Samples: <span class="ops-value">{$timeSeriesData.length}</span></span>
-      <span class="ops-muted">Tasks: <span class="ops-value">{$taskHistory.length}</span></span>
+      {#if view === 'live'}
+        <span class="ops-muted">Stream: <span class="ops-value {$metricsWsConnected ? 'text-status-ok' : 'text-status-warn'}">{$metricsWsConnected ? 'live' : 'offline'}</span></span>
+        <span class="ops-muted">Samples: <span class="ops-value">{$timeSeriesData.length}</span></span>
+        <span class="ops-muted">Tasks: <span class="ops-value">{$taskHistory.length}</span></span>
+      {:else}
+        <span class="ops-muted">Window: <span class="ops-value">{rangeLabel($historyRange)}</span></span>
+        <span class="ops-muted">Runs: <span class="ops-value">{seriesRuns}</span></span>
+        <span class="ops-muted">Buckets: <span class="ops-value">{$taskSeries.length}</span></span>
+        <span class="ops-muted">Samples: <span class="ops-value">{$hardwareSeries.length}</span></span>
+      {/if}
     </div>
   </section>
 
@@ -145,6 +241,7 @@
     {/if}
   </section>
 
+  {#if view === 'live'}
   <section class="grid grid-cols-1 gap-4 xl:grid-cols-2">
     <ChartPanel title="RAM" value={latest($timeSeriesData) ? `${latest($timeSeriesData)?.ram_used.toFixed(1)} / ${latest($timeSeriesData)?.ram_total.toFixed(1)} GB` : 'No data'}>
       <SvgLineChart title="RAM usage" values={ramValues} {labels} yMax={ramTotal || null} unit=" GB" />
@@ -176,4 +273,82 @@
       </ChartPanel>
     </div>
   </section>
+  {:else}
+  <section class="space-y-4">
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <article class="ops-card p-5">
+        <span class="ops-label">Runs</span>
+        <p class="mt-4 ops-value text-3xl font-bold">{$taskSeriesSummary?.count ?? 0}</p>
+        <p class="mt-3 text-sm text-muted-foreground">over the last {rangeLabel($historyRange)}</p>
+      </article>
+      <article class="ops-card p-5">
+        <span class="ops-label">Mean Generation</span>
+        <p class="mt-4 ops-value text-3xl font-bold">{$taskSeriesSummary?.count ? $taskSeriesSummary.gen_tps_mean.toFixed(1) : '--'}<span class="text-base"> t/s</span></p>
+        <p class="mt-3 text-sm text-muted-foreground">across every run in the window</p>
+      </article>
+      <article class="ops-card p-5">
+        <span class="ops-label">p95 Generation</span>
+        <p class="mt-4 ops-value text-3xl font-bold">{$taskSeriesSummary?.count ? $taskSeriesSummary.gen_tps_p95.toFixed(1) : '--'}<span class="text-base"> t/s</span></p>
+        <p class="mt-3 text-sm text-muted-foreground">95th percentile of the raw runs</p>
+      </article>
+      <article class="ops-card p-5">
+        <span class="ops-label">Slowest Bucket p50</span>
+        <p class="mt-4 ops-value text-3xl font-bold">{slowestP50()?.toFixed(1) ?? '--'}<span class="text-base"> t/s</span></p>
+        <p class="mt-3 text-sm text-muted-foreground">the dip worth investigating</p>
+      </article>
+    </div>
+
+    {#if $seriesLoading && !$seriesLoaded}
+      <section class="ops-panel p-8 text-center text-sm text-muted-foreground">Loading history...</section>
+    {:else if $taskSeries.length === 0 && $hardwareSeries.length === 0}
+      <section class="ops-panel p-8 text-center">
+        <p class="ops-value">No history recorded in this window</p>
+        <p class="mt-2 text-sm text-muted-foreground">
+          The background sampler records every completed inference and one hardware
+          rollup per minute. Pick a longer range, or come back once the server has run some work.
+        </p>
+      </section>
+    {:else}
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="xl:col-span-2">
+          <ChartPanel title="Generation Speed (mean)" value={$taskSeries.length ? `${rangeLabel($historyRange)} - ${$taskSeries.length} buckets` : 'No runs'}>
+            <SvgLineChart title="Mean generation speed per bucket" values={seriesTpsMean} labels={seriesLabels} unit=" t/s" color="#d8ff00" />
+          </ChartPanel>
+        </div>
+
+        <ChartPanel title="Generation p50" value={slowestP50() !== null ? `low ${slowestP50()?.toFixed(1)} t/s` : 'No runs'}>
+          <SvgLineChart title="Median generation speed per bucket" values={seriesTpsP50} labels={seriesLabels} unit=" t/s" color="#40f078" />
+        </ChartPanel>
+
+        <ChartPanel title="Generation p95" value={$taskSeriesSummary?.count ? `window ${$taskSeriesSummary.gen_tps_p95.toFixed(1)} t/s` : 'No runs'}>
+          <SvgLineChart title="95th percentile generation speed per bucket" values={seriesTpsP95} labels={seriesLabels} unit=" t/s" color="#ffb84d" />
+        </ChartPanel>
+
+        <ChartPanel title="TTFT (mean)" value={$taskSeriesSummary?.count ? `${$taskSeriesSummary.ttft_mean.toFixed(2)}s` : 'No runs'}>
+          <SvgLineChart title="Mean time to first token per bucket" values={seriesTtft} labels={seriesLabels} unit="s" color="#ffb0a8" />
+        </ChartPanel>
+
+        <ChartPanel title="Tokens per Bucket" value={$taskSeriesSummary?.count ? `${$taskSeriesSummary.total_tokens} total` : 'No runs'}>
+          <SvgBarChart title="Total tokens per bucket" values={seriesTokens} labels={seriesLabels} color="#efff7a" />
+        </ChartPanel>
+
+        <ChartPanel title="RAM (mean / peak)" value={hardwareRam.length ? `${hardwareRam.at(-1)?.toFixed(1)}% / ${Math.max(...hardwareRamPeak).toFixed(1)}%` : 'No samples'}>
+          <SvgLineChart title="Mean RAM percentage per bucket" values={hardwareRam} labels={hardwareLabels} yMax={100} unit="%" color="#76a9ff" />
+        </ChartPanel>
+
+        <ChartPanel title="CPU (mean)" value={hardwareCpu.length ? `${hardwareCpu.at(-1)?.toFixed(1)}%` : 'No samples'}>
+          <SvgLineChart title="Mean CPU percentage per bucket" values={hardwareCpu} labels={hardwareLabels} yMax={100} unit="%" color="#40f078" />
+        </ChartPanel>
+
+        {#if hardwareGpu.length > 0}
+          <div class="xl:col-span-2">
+            <ChartPanel title="GPU Load (mean)" value={`${hardwareGpu.at(-1)?.toFixed(1)}%`}>
+              <SvgLineChart title="Mean GPU load per bucket" values={hardwareGpu} labels={hardwareLabels} yMax={100} unit="%" color="#c28cff" />
+            </ChartPanel>
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </section>
+  {/if}
 </div>

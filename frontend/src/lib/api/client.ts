@@ -33,14 +33,18 @@ import type {
   BenchStoredResult,
   BenchSuite,
   DiagnosticReport,
+  HardwareSeriesBucket,
+  HistoryRange,
   MetricPoint,
   ModelProfiles,
   Profile,
   ProfileConfig,
   SmartRecommendation,
   RunEvidenceSeed,
+  SeriesResponse,
   SmokeTestResponse,
   TaskRecord,
+  TaskSeriesBucket,
   TelemetrySnapshot,
   IntakeProfileResponse,
   IntakeReport,
@@ -293,8 +297,13 @@ export const api = {
     history: (minutes = 30) => get<{ points: MetricPoint[]; total: number; retention_minutes: number }>(`/metrics/history?minutes=${minutes}`),
     latest: () => get<{ point: MetricPoint | null }>('/metrics/latest'),
     tasks: (n = 20) => get<{ tasks: TaskRecord[] }>(`/metrics/tasks?n=${n}`),
+    taskSeries: (range: HistoryRange) =>
+      get<SeriesResponse<TaskSeriesBucket>>(`/metrics/tasks/series?range=${range}`),
+    hardwareSeries: (range: HistoryRange) =>
+      get<SeriesResponse<HardwareSeriesBucket>>(`/metrics/hardware/series?range=${range}`),
     clear: () => post<{ cleared: boolean }>('/metrics/clear'),
-    tasksCsvUrl: () => `${BASE}${withLccKey('/metrics/tasks/csv')}`,
+    tasksCsvUrl: (range?: HistoryRange) =>
+      `${BASE}${withLccKey(`/metrics/tasks/csv${range ? `?range=${range}` : ''}`)}`,
   },
 
   // ── Bench Lab (M13, backend-gated) ──
