@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Shim: force user scope for LCC's systemctl calls.
+# The real binary lives at /usr/bin/systemctl; this must not be first on PATH
+# for anything other than the lemonade-cc service.
+for arg in "$@"; do
+  if [ "$arg" = "--user" ] || [ "$arg" = "--system" ]; then
+    exec /usr/bin/systemctl "$@"
+  fi
+done
+exec /usr/bin/systemctl --user "$@"
