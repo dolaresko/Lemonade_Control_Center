@@ -30,6 +30,11 @@ export const seriesLoaded = writable(false);
 
 export const HISTORY_RANGES: HistoryRange[] = ['1h', '24h', '7d', '30d'];
 
+/** Chart axis labels: clock time for short windows, calendar dates for long ones. */
+export function rangeTickFormat(range: HistoryRange): 'time' | 'date' {
+  return range === '1h' || range === '24h' ? 'time' : 'date';
+}
+
 let ws: WebSocket | null = null;
 const MAX_POINTS = 360;
 
