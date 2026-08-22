@@ -22,13 +22,16 @@ from app.config import settings
 
 SCHEMA_VERSION = 1
 
-# Bucket width per selectable range, chosen to keep every series near or under
-# ~170 points so the SVG charts stay readable without downsampling client-side.
+# Bucket width per selectable range. Sized so that a bucket is usually
+# populated rather than merely to cap the point count: empty buckets are
+# dropped and gaps are drawn as gaps, so too fine a bucket turns a sparse
+# workload into scattered points instead of a trend. Each range lands at
+# 12-30 points, which the SVG charts render comfortably.
 RANGE_WINDOWS: dict[str, tuple[timedelta, int]] = {
-    "1h": (timedelta(hours=1), 60),
-    "24h": (timedelta(hours=24), 15 * 60),
-    "7d": (timedelta(days=7), 60 * 60),
-    "30d": (timedelta(days=30), 6 * 60 * 60),
+    "1h": (timedelta(hours=1), 5 * 60),
+    "24h": (timedelta(hours=24), 60 * 60),
+    "7d": (timedelta(days=7), 6 * 60 * 60),
+    "30d": (timedelta(days=30), 24 * 60 * 60),
 }
 
 DEFAULT_RANGE = "24h"
