@@ -728,6 +728,57 @@ export interface TaskRecord {
 
 export type TimeRange = 5 | 15 | 30;
 
+/** Long-run window selectors backed by the SQLite metrics store. */
+export type HistoryRange = '1h' | '24h' | '7d' | '30d';
+
+export interface TaskSeriesBucket {
+  t: string;
+  count: number;
+  gen_tps_mean: number;
+  gen_tps_p50: number;
+  gen_tps_p95: number;
+  ttft_mean: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface HardwareSeriesBucket {
+  t: string;
+  count: number;
+  ram_used_gb: number;
+  ram_total_gb: number;
+  ram_percent: number;
+  ram_percent_min: number;
+  ram_percent_max: number;
+  cpu_percent: number;
+  swap_used_gb: number;
+  gpu_load_percent: number | null;
+  gpu_temp_c: number | null;
+  temps: Record<string, number>;
+}
+
+export interface TaskSeriesSummary {
+  count: number;
+  gen_tps_mean: number;
+  gen_tps_p50: number;
+  gen_tps_p95: number;
+  ttft_mean: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface SeriesResponse<T> {
+  range: HistoryRange;
+  bucket_seconds: number;
+  start: string;
+  end: string;
+  buckets: T[];
+  /** Aggregated over the raw runs in the window; only the task series has it. */
+  summary?: TaskSeriesSummary;
+}
+
 // ═══════════════════════════════════════════════
 // Bench Lab Types (M13)
 // ═══════════════════════════════════════════════

@@ -11,6 +11,16 @@
     TimerReset,
   } from 'lucide-svelte';
   import { formatDuration, formatNumber, formatTPS } from '$lib/utils/format';
+  import SvgLineChart from '$lib/components/hardware/SvgLineChart.svelte';
+  import {
+    historyRange,
+    HISTORY_RANGES,
+    loadSeries,
+    seriesLoading,
+    setHistoryRange,
+    taskSeries,
+    taskSeriesSummary,
+  } from '$lib/stores/metrics';
 
   interface FinishReason {
     reason?: string;
@@ -60,7 +70,22 @@
 
   onMount(() => {
     refreshLogs();
+    loadSeries();
   });
+
+  // Compact generation-speed trend over the selected long-run window. The
+  // buckets come from the persisted history, so it survives restarts and
+  // covers time nobody had this page open.
+  $: trendValues = $taskSeries.map((bucket) => bucket.gen_tps_mean);
+  $: trendLabels = $taskSeries.map((bucket) => formatBucket(bucket.t));
+
+  function formatBucket(value: string): string {
+    const moment = new Date(value);
+    if ($historyRange === '1h' || $historyRange === '24h') {
+      return moment.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return moment.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
 
   $: filteredLogs = logs.filter((entry) => {
     const level = entry.level ?? 'info';
@@ -213,6 +238,55 @@
         <p class="mt-5 ops-value text-3xl font-bold">{durationMs(lastTask?.total_duration_seconds)}</p>
         <p class="mt-4 text-sm text-muted-foreground">Last Task</p>
       </article>
+    </section>
+
+    <section class="ops-panel">
+      <div class="ops-card-header flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+          <Gauge class="h-5 w-5 text-muted-foreground" />
+          <h2 class="text-lg font-bold">Generation Speed Trend</h2>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="ops-muted text-sm">
+            mean <span class="ops-value">{$taskSeriesSummary?.count ? formatTPS($taskSeriesSummary.gen_tps_mean) : '--'}</span>
+          </span>
+          <span class="ops-muted text-sm">
+            p95 <span class="ops-value">{$taskSeriesSummary?.count ? formatTPS($taskSeriesSummary.gen_tps_p95) : '--'}</span>
+          </span>
+          <div class="flex gap-1 rounded border border-[#444936] bg-[#2b2d2a] p-1">
+            {#each HISTORY_RANGES as range}
+              <button
+                class="rounded px-2.5 py-1.5 ops-mono text-xs {$historyRange === range ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
+                type="button"
+                on:click={() => setHistoryRange(range)}
+              >
+                {range}
+              </button>
+            {/each}
+          </div>
+        </div>
+      </div>
+      <div class="p-5">
+        {#if $seriesLoading && trendValues.length === 0}
+          <p class="text-sm text-muted-foreground">Loading trend...</p>
+        {:else if trendValues.length === 0}
+          <p class="text-sm text-muted-foreground">
+            No runs recorded in the last {$historyRange}. History accrues in the background
+            as the server completes inferences.
+          </p>
+        {:else}
+          <SvgLineChart
+            title="Mean generation speed per bucket"
+            values={trendValues}
+            labels={trendLabels}
+            unit=" t/s"
+            heightClass="h-20"
+          />
+          <p class="mt-2 text-xs text-muted-foreground">
+            {$taskSeriesSummary?.count ?? 0} runs across {trendValues.length} buckets
+          </p>
+        {/if}
+      </div>
     </section>
 
     <section class="grid grid-cols-1 gap-4 xl:grid-cols-[2fr_1fr]">
