@@ -133,8 +133,20 @@
 
   $: hardwareTimestamps = $hardwareSeries.map((bucket) => bucket.t);
   $: hardwareCounts = $hardwareSeries.map((bucket) => bucket.count);
-  $: hardwareRam = $hardwareSeries.map((bucket) => bucket.ram_percent);
-  $: hardwareRamPeak = $hardwareSeries.map((bucket) => bucket.ram_percent_max);
+  // Gigabytes, to match the live view and because the question this panel
+  // answers -- will the next model fit -- is asked in gigabytes, not percent.
+  $: hardwareRam = $hardwareSeries.map((bucket) => bucket.ram_used_gb);
+  // The store keeps the within-bucket extremes as percentages only, so the
+  // peak is converted with the bucket's own total. Total RAM is fixed for the
+  // life of the machine, so a bucket's mean total is its instantaneous total.
+  $: hardwareRamPeak = $hardwareSeries.map(
+    (bucket) => (bucket.ram_percent_max * bucket.ram_total_gb) / 100,
+  );
+  // The axis ceiling is the machine's own total, never a hardcoded number.
+  // Taken as the maximum across buckets so the converted peak always fits.
+  $: hardwareRamTotal = $hardwareSeries.length
+    ? Math.max(...$hardwareSeries.map((bucket) => bucket.ram_total_gb))
+    : 0;
   $: hardwareCpu = $hardwareSeries.map((bucket) => bucket.cpu_percent);
   $: hardwareGpuBuckets = $hardwareSeries.filter(
     (bucket) => typeof bucket.gpu_load_percent === 'number',
@@ -499,8 +511,8 @@
           <SvgBarChart title="Total tokens per bucket" values={seriesTokens} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} bucketSeconds={$taskWindow.bucketSeconds} ordinal axes interactive showFooter={false} color="#efff7a" />
         </ChartPanel>
 
-        <ChartPanel title="RAM (mean / peak)" value={hardwareRam.length ? `${hardwareRam.at(-1)?.toFixed(1)}% / ${Math.max(...hardwareRamPeak).toFixed(1)}%` : 'No samples'}>
-          <SvgLineChart title="Mean RAM percentage per bucket" values={hardwareRam} timestamps={hardwareTimestamps} counts={hardwareCounts} {tickFormat} countLabel="sample" start={$hardwareWindow.start} end={$hardwareWindow.end} bucketSeconds={$hardwareWindow.bucketSeconds} axes interactive showFooter={false} yMax={100} unit="%" color="#76a9ff" />
+        <ChartPanel title="RAM (mean / peak)" value={hardwareRam.length ? `${hardwareRam.at(-1)?.toFixed(1)} / ${Math.max(...hardwareRamPeak).toFixed(1)} GB` : 'No samples'}>
+          <SvgLineChart title="Mean RAM used per bucket" values={hardwareRam} timestamps={hardwareTimestamps} counts={hardwareCounts} {tickFormat} countLabel="sample" start={$hardwareWindow.start} end={$hardwareWindow.end} bucketSeconds={$hardwareWindow.bucketSeconds} axes interactive showFooter={false} yMax={hardwareRamTotal || null} unit=" GB" color="#76a9ff" />
         </ChartPanel>
 
         <ChartPanel title="CPU (mean)" value={hardwareCpu.length ? `${hardwareCpu.at(-1)?.toFixed(1)}%` : 'No samples'}>
