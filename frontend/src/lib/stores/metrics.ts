@@ -1,6 +1,7 @@
 import { get, writable } from 'svelte/store';
 import { api, withLccKey } from '$lib/api/client';
 import { notify } from '$lib/stores/notifications';
+import { percentile, sizeKeySteps } from '$lib/utils/chart';
 import type {
   HardwareSeriesBucket,
   HistoryRange,
@@ -54,24 +55,26 @@ const RANGE_MS: Record<HistoryRange, number> = {
   '30d': 30 * 24 * HOUR_MS,
 };
 
-/** Individual runs, for the ranges the scatter plots one point per run. */
+/** Individual runs, for the scatter that plots one point per run. */
 export const taskRuns = writable<TaskRecord[]>([]);
-export const runWindow = writable<SeriesWindow>(EMPTY_WINDOW);
+
+/** Ceiling on a runs request; also what the footer reports as truncated. */
+export const RUN_LIMIT = 5000;
+
+/**
+ * Stable reference for the scatter's size encoding: the p95 of output_tokens
+ * over the whole 30d history, so a run's mark is the same size on every
+ * range. Fetched once and cached here rather than recomputed per range
+ * switch -- see loadMagnitudeCeiling.
+ */
+export const magnitudeCeiling = writable<number | null>(null);
+/** Size-key reference values, drawn from the same fixed 30d sample. */
+export const magnitudeKeySteps = writable<number[]>([]);
+let magnitudeCeilingLoaded = false;
 
 /** Chart axis labels: clock time for short windows, calendar dates for long ones. */
 export function rangeTickFormat(range: HistoryRange): 'time' | 'date' {
   return range === '1h' || range === '24h' ? 'time' : 'date';
-}
-
-/**
- * How the generation-speed chart plots a range.
- *
- * A run is a discrete event, and on the short ranges there are few enough of
- * them to draw every one. Over a week the marks would pile into a smear, so
- * those ranges fall back to one mark per bucket.
- */
-export function rangeScatterMode(range: HistoryRange): 'run' | 'bucket' {
-  return range === '1h' || range === '24h' ? 'run' : 'bucket';
 }
 
 let ws: WebSocket | null = null;
@@ -129,7 +132,10 @@ export function disconnectMetricsWs(): void {
   metricsWsConnected.set(false);
 }
 
-export async function loadSeries(range?: HistoryRange): Promise<void> {
+export async function loadSeries(
+  range?: HistoryRange,
+  opts: { refreshCeiling?: boolean } = {},
+): Promise<void> {
   const selected = range ?? get(historyRange);
   seriesLoading.set(true);
 
@@ -138,18 +144,19 @@ export async function loadSeries(range?: HistoryRange): Promise<void> {
   // derives its own window from the server clock a moment later.
   const until = new Date();
   const since = new Date(until.getTime() - RANGE_MS[selected]);
-  const wantRuns = rangeScatterMode(selected) === 'run';
+
+  // Fired alongside the rest, not awaited into the same array: a fixed-scale
+  // refresh shouldn't block the range's own charts, and it may not run at all.
+  const ceilingPromise = loadMagnitudeCeiling(Boolean(opts.refreshCeiling));
 
   const [tasks, hardware, runs] = await Promise.allSettled([
     api.metrics.taskSeries(selected),
     api.metrics.hardwareSeries(selected),
-    wantRuns
-      ? api.metrics.tasksWindow({
-          since: since.toISOString(),
-          until: until.toISOString(),
-          n: 1000,
-        })
-      : Promise.resolve(null),
+    api.metrics.tasksWindow({
+      since: since.toISOString(),
+      until: until.toISOString(),
+      n: RUN_LIMIT,
+    }),
   ]);
 
   // An empty range is a legitimate answer, not a failure: a quiet journal
@@ -164,16 +171,42 @@ export async function loadSeries(range?: HistoryRange): Promise<void> {
   hardwareSeries.set(hardwareData?.buckets ?? []);
   hardwareWindow.set(toWindow(hardwareData));
 
-  const runData = runs.status === 'fulfilled' && runs.value?.ok ? runs.value.data : null;
+  const runData = runs.status === 'fulfilled' && runs.value.ok ? runs.value.data : null;
   taskRuns.set(runData?.tasks ?? []);
-  runWindow.set(
-    wantRuns
-      ? { start: since.toISOString(), end: until.toISOString(), bucketSeconds: null }
-      : EMPTY_WINDOW,
-  );
 
+  await ceilingPromise;
   seriesLoading.set(false);
   seriesLoaded.set(true);
+}
+
+/**
+ * Refresh the scatter's fixed size scale from the whole 30d history.
+ *
+ * Guarded so a plain range switch never re-fetches it: `force` is only passed
+ * from an explicit user refresh, and the very first load always runs because
+ * nothing has been cached yet.
+ */
+export async function loadMagnitudeCeiling(force = false): Promise<void> {
+  if (magnitudeCeilingLoaded && !force) return;
+  const until = new Date();
+  const since = new Date(until.getTime() - RANGE_MS['30d']);
+  const result = await api.metrics.tasksWindow({
+    since: since.toISOString(),
+    until: until.toISOString(),
+    n: RUN_LIMIT,
+  });
+  // Keep whatever ceiling is already cached rather than blank the scale on a
+  // transient failure.
+  if (!result.ok) return;
+
+  const magnitudes = result.data.tasks
+    .map((task) => task.output_tokens)
+    .filter((value): value is number => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+
+  magnitudeCeiling.set(magnitudes.length ? percentile(magnitudes, 0.95) : null);
+  magnitudeKeySteps.set(sizeKeySteps(magnitudes));
+  magnitudeCeilingLoaded = true;
 }
 
 export function setHistoryRange(range: HistoryRange): void {
@@ -201,7 +234,9 @@ export async function clearMetricsHistory(): Promise<void> {
     hardwareSeries.set([]);
     taskWindow.set(EMPTY_WINDOW);
     hardwareWindow.set(EMPTY_WINDOW);
-    runWindow.set(EMPTY_WINDOW);
+    magnitudeCeiling.set(null);
+    magnitudeKeySteps.set([]);
+    magnitudeCeilingLoaded = false;
     notify.info('Metrics cleared', 'Hardware and task history buffers were cleared.');
   } else {
     notify.error('Clear metrics failed', result.error);

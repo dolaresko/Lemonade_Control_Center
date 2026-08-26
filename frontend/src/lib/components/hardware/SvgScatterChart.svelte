@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    formatAxisLabel,
     formatTick,
     formatValue,
     markRadius,
@@ -7,17 +8,20 @@
     MARK_RADIUS_MAX,
     nearestMarkIndex,
     niceScale,
-    sizeKeySteps,
-    timeTicks,
-    xTickTarget,
+    SESSION_GAP_MS,
+    SESSION_LABEL_MIN_GAP_PX,
+    sessionStartIndices,
+    thinTicks,
     type ScatterPoint,
     type TickFormat,
   } from '$lib/utils/chart';
 
   /**
-   * Discrete events plotted against time. Nothing is joined up: a run is a
-   * thing that happened at an instant, and a line between two of them would
-   * claim a continuity that the minutes or hours between them do not have.
+   * Discrete events plotted against their ordinal position, not their
+   * timestamp: the workload arrives in bursts, and a time-linear axis
+   * collapses a whole burst into a couple of pixels. X is "the Nth run in
+   * this window" -- runs spread out evenly, and time survives only as the
+   * axis labels.
    */
   export let points: ScatterPoint[] = [];
   export let title = 'Chart';
@@ -28,16 +32,17 @@
   export let surface = '#171918';
   export let heightClass = 'h-64';
   export let tickFormat: TickFormat = 'time';
-  /** Requested window. The domain is what the user asked for, not the extent
-   *  of the data, so a quiet range still reads as a quiet range. */
-  export let start: string | null = null;
-  export let end: string | null = null;
   export let yMax: number | null = null;
+  /** Fixed reference for the size encoding -- e.g. the 30d p95 of the
+   *  magnitude -- so a mark's radius means the same thing on every range. */
+  export let magnitudeCeiling = 0;
+  /** Size-key reference values, computed against the same fixed scale. */
+  export let keySteps: number[] = [];
   /** What the mark area encodes, for the size key caption. */
   export let sizeLabel = 'output tokens';
   /** Qualifies the tooltip's headline number, e.g. "mean" for a bucket. */
   export let valueLabel = '';
-  /** Which mode is active, plus anything dropped from the plot. */
+  /** Anything dropped from the plot. */
   export let footnote = '';
 
   let plotBox: HTMLDivElement;
@@ -53,10 +58,6 @@
   $: marks = [...points].sort((left, right) => left.time - right.time);
   $: hasData = marks.length > 0;
   $: lastIndex = marks.length - 1;
-
-  $: domainStart = parseBoundary(start) ?? (hasData ? marks[0].time : 0);
-  $: domainEnd = parseBoundary(end) ?? (hasData ? marks[lastIndex].time : 1);
-  $: domainSpan = domainEnd > domainStart ? domainEnd - domainStart : 0;
 
   $: padLeft = 46;
   $: padRight = 18;
@@ -75,16 +76,43 @@
   // scale on a plot that has nothing to scale.
   $: gridTicks = hasData ? scale.ticks.filter((tick) => tick <= axisMax) : [];
 
-  $: axisTimeTicks = hasData
-    ? timeTicks(domainStart, domainEnd, xTickTarget(plotWidth), tickFormat)
-    : [];
+  $: markXs = marks.map((_mark, index) => indexX(index));
+  $: markYs = marks.map((mark) => pointY(mark.value));
 
   $: magnitudes = marks.map((mark) => mark.magnitude);
-  $: magnitudeMax = magnitudes.length ? Math.max(...magnitudes) : 0;
-  $: radii = magnitudes.map((magnitude) => markRadius(magnitude, magnitudeMax));
-  $: markXs = marks.map((mark) => timeX(mark.time));
-  $: markYs = marks.map((mark) => pointY(mark.value));
-  $: keySteps = sizeKeySteps(magnitudes);
+  $: radii = magnitudes.map((magnitude) => markRadius(magnitude, magnitudeCeiling));
+
+  // Sessions group runs by arrival, not by an arbitrary index stride: a new
+  // one starts once the gap since the previous run passes SESSION_GAP_MS.
+  // Ticks sit under the first run of each session and thin out -- never
+  // overlapping -- rather than drawing a separator line per session, which
+  // on 30d would be dozens of vertical lines of pure non-data ink.
+  $: markTimes = marks.map((mark) => mark.time);
+  $: sessionStarts = hasData ? sessionStartIndices(markTimes, SESSION_GAP_MS) : [];
+  $: sessionTickIndices = hasData
+    ? thinTicks(sessionStarts, indexX, SESSION_LABEL_MIN_GAP_PX)
+    : [];
+  $: sessionTicks = sessionTickIndices.map((index) => ({
+    x: indexX(index),
+    label: formatAxisLabel(new Date(markTimes[index]).toISOString(), tickFormat),
+  }));
+
+  // The dip is the reason this chart exists; label it directly rather than
+  // leaving it discoverable only on hover.
+  $: minIndex = hasData ? indexOfMin(marks.map((mark) => mark.value)) : null;
+  $: minMarkX = minIndex !== null ? markXs[minIndex] : 0;
+  $: minMarkY = minIndex !== null ? markYs[minIndex] : 0;
+  $: minLabelBelow = minMarkY < padTop + plotHeight / 2;
+  $: minLabelY = minIndex !== null
+    ? clamp(
+        minLabelBelow ? minMarkY + radii[minIndex] + 13 : minMarkY - radii[minIndex] - 7,
+        padTop + 9,
+        padTop + plotHeight - 3,
+      )
+    : 0;
+  $: minLabelAnchor =
+    minMarkX < padLeft + 36 ? 'start' : minMarkX > padLeft + plotWidth - 36 ? 'end' : 'middle';
+  $: minLabelText = minIndex !== null ? formatValue(marks[minIndex].value, unit) : '';
 
   $: active = activeIndex === null ? null : marks[activeIndex];
   $: activeX = activeIndex === null ? 0 : markXs[activeIndex];
@@ -98,17 +126,23 @@
         .join(', ')}`
     : `${title}. ${marks.length} points. Use arrow keys to inspect them in time order.`;
 
-  function parseBoundary(value: string | null): number | null {
-    if (!value) return null;
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(Math.max(value, min), max);
   }
 
-  /** Map epoch milliseconds onto the plot, linear in time. */
-  function timeX(time: number): number {
-    if (domainSpan <= 0) return padLeft + plotWidth / 2;
-    const ratio = (time - domainStart) / domainSpan;
-    return padLeft + Math.min(Math.max(ratio, 0), 1) * plotWidth;
+  function indexOfMin(values: number[]): number | null {
+    if (values.length === 0) return null;
+    let best = 0;
+    for (let index = 1; index < values.length; index += 1) {
+      if (values[index] < values[best]) best = index;
+    }
+    return best;
+  }
+
+  /** Map a run's position in the window onto the plot, linear in index. */
+  function indexX(index: number): number {
+    if (lastIndex <= 0) return padLeft + plotWidth / 2;
+    return padLeft + (index / lastIndex) * plotWidth;
   }
 
   function pointY(value: number): number {
@@ -218,18 +252,20 @@
         </text>
       {/each}
 
-      {#each axisTimeTicks as tick}
+      <!-- One tick per session, under its first run -- never one per run, and
+           never a separator line through the plot. -->
+      {#each sessionTicks as tick}
         <line
-          x1={timeX(tick.time)}
+          x1={tick.x}
           y1={padTop + plotHeight}
-          x2={timeX(tick.time)}
+          x2={tick.x}
           y2={padTop + plotHeight + 4}
           stroke="#3f432d"
           stroke-width="1"
           vector-effect="non-scaling-stroke"
         />
         <text
-          x={timeX(tick.time)}
+          x={tick.x}
           y={padTop + plotHeight + 17}
           text-anchor="middle"
           font-size="10"
@@ -279,6 +315,14 @@
           vector-effect="non-scaling-stroke"
         />
       {/if}
+
+      {#if minIndex !== null}
+        <!-- The one direct label on the plot: the slowest run, in a muted
+             token -- never the series colour, which would read as "selected". -->
+        <text x={minMarkX} y={minLabelY} text-anchor={minLabelAnchor} font-size="10" fill="#8b9178">
+          {minLabelText}
+        </text>
+      {/if}
     </svg>
   </div>
 
@@ -319,7 +363,7 @@
               <circle
                 cx={MARK_RADIUS_MAX}
                 cy={MARK_RADIUS_MAX}
-                r={markRadius(step, magnitudeMax)}
+                r={markRadius(step, magnitudeCeiling)}
                 fill="none"
                 stroke={color}
                 stroke-width="1.5"

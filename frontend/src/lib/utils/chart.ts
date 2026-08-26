@@ -410,6 +410,70 @@ export function nearestMarkIndex(
   return best;
 }
 
+/** A new session starts when the gap since the previous run exceeds this. */
+export const SESSION_GAP_MS = 20 * 60_000;
+
+/** Minimum pixel gap between adjacent session-tick labels before one is dropped. */
+export const SESSION_LABEL_MIN_GAP_PX = 46;
+
+/**
+ * Indices (into a time-ascending array) where a new session begins: index 0,
+ * plus every index whose gap from the previous point exceeds `gapMs`.
+ */
+export function sessionStartIndices(times: number[], gapMs: number): number[] {
+  if (times.length === 0) return [];
+  const starts = [0];
+  for (let index = 1; index < times.length; index += 1) {
+    if (times[index] - times[index - 1] > gapMs) starts.push(index);
+  }
+  return starts;
+}
+
+/**
+ * Thin a candidate tick list so labels never collide.
+ *
+ * Sessions vary in size, so candidates land at uneven pixel positions and a
+ * fixed stride cannot guarantee clearance. Keep the first candidate, then
+ * greedily keep the next one only once it clears `minGapPx` from the last
+ * kept tick. The final candidate is always forced in -- swapping out its
+ * nearest neighbour if the two would otherwise collide -- so the window's
+ * right edge is never left unlabelled.
+ */
+export function thinTicks(
+  candidates: number[],
+  xOf: (index: number) => number,
+  minGapPx: number,
+): number[] {
+  if (candidates.length <= 1) return candidates;
+  const kept: number[] = [candidates[0]];
+  let lastX = xOf(candidates[0]);
+  for (let index = 1; index < candidates.length - 1; index += 1) {
+    const x = xOf(candidates[index]);
+    if (x - lastX >= minGapPx) {
+      kept.push(candidates[index]);
+      lastX = x;
+    }
+  }
+  const last = candidates[candidates.length - 1];
+  if (xOf(last) - lastX >= minGapPx) {
+    kept.push(last);
+  } else if (kept[kept.length - 1] !== last) {
+    kept[kept.length - 1] = last;
+  }
+  return kept;
+}
+
+/** p-th percentile (0..1) over an ascending array, interpolated between ranks. */
+export function percentile(sortedAscending: number[], p: number): number {
+  if (sortedAscending.length === 0) return 0;
+  if (sortedAscending.length === 1) return sortedAscending[0];
+  const rank = p * (sortedAscending.length - 1);
+  const lower = Math.floor(rank);
+  const upper = Math.ceil(rank);
+  if (lower === upper) return sortedAscending[lower];
+  return sortedAscending[lower] + (sortedAscending[upper] - sortedAscending[lower]) * (rank - lower);
+}
+
 /** "hour", "6 hours", "day" -- how wide one bucket is, for the footer note. */
 export function formatBucketWidth(seconds: number | null): string {
   if (!seconds || seconds <= 0) return 'bucket';

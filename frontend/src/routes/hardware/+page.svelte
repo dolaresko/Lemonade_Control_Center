@@ -15,12 +15,13 @@
     HISTORY_RANGES,
     loadMetrics,
     loadSeries,
+    magnitudeCeiling,
+    magnitudeKeySteps,
     metricsLoading,
     metricsPaused,
     metricsWsConnected,
-    rangeScatterMode,
     rangeTickFormat,
-    runWindow,
+    RUN_LIMIT,
     seriesLoaded,
     seriesLoading,
     setHistoryRange,
@@ -35,14 +36,12 @@
     timeSeriesData,
     toggleMetricsPause,
   } from '$lib/stores/metrics';
-  import { formatBucketWidth, formatTooltipTimestamp, type ScatterPoint } from '$lib/utils/chart';
-  import type { HistoryRange, MetricPoint, TaskRecord, TaskSeriesBucket, TimeRange } from '$lib/types';
+  import { formatTooltipTimestamp, type ScatterPoint } from '$lib/utils/chart';
+  import type { HistoryRange, MetricPoint, TaskRecord, TimeRange } from '$lib/types';
   import type { TelemetrySnapshot } from '$lib/types';
   import { api } from '$lib/api/client';
 
   const ranges: TimeRange[] = [5, 15, 30];
-  /** Ceiling on the runs request; also what the footer reports as truncated. */
-  const RUN_LIMIT = 1000;
   let telemetry: TelemetrySnapshot | null = null;
 
   // The live stream stays the default view; long-run history is opt-in and
@@ -107,11 +106,9 @@
 
   // ── Generation-speed scatter ──
   // A run is a discrete event, so it is drawn as one: a mark per run, no line
-  // between them. The long ranges hold too many runs to draw individually and
-  // fall back to a mark per bucket.
-  $: scatterMode = rangeScatterMode($historyRange);
-  $: scatterWindow = scatterMode === 'run' ? $runWindow : $taskWindow;
-  $: bucketWidth = formatBucketWidth($taskWindow.bucketSeconds);
+  // between them, on every range -- X is the run's position in the window,
+  // not its timestamp, so a burst of runs spreads out instead of collapsing
+  // into a single column.
 
   // A rate of zero is not a slow run, it is a run whose rate could not be
   // measured -- a one-token completion has no generation interval to divide
@@ -119,35 +116,22 @@
   $: measurableRuns = $taskRuns.filter((run) => run.gen_tps > 0);
   $: unmeasurableRuns = $taskRuns.length - measurableRuns.length;
   $: runPoints = measurableRuns.map(toRunPoint);
-  // The request asks for 1000 runs; a window that fills it may have more.
+  // The request asks for RUN_LIMIT runs; a window that fills it may have more.
   $: runsTruncated = $taskRuns.length >= RUN_LIMIT;
 
-  // The server already drops unmeasurable rates from its aggregates, so a
-  // bucket with a zero mean is a bucket where nothing was measurable at all.
-  $: measurableBuckets = $taskSeries.filter((bucket) => bucket.gen_tps_mean > 0);
-  $: unmeasurableBucketRuns = $taskSeries
-    .filter((bucket) => bucket.gen_tps_mean <= 0)
-    .reduce((total, bucket) => total + bucket.count, 0);
-  $: bucketPoints = measurableBuckets.map(toBucketPoint);
-  $: plottedBucketRuns = measurableBuckets.reduce((total, bucket) => total + bucket.count, 0);
-
-  $: scatterPoints = scatterMode === 'run' ? runPoints : bucketPoints;
-  $: scatterUnmeasurable = scatterMode === 'run' ? unmeasurableRuns : unmeasurableBucketRuns;
   $: scatterFootnote = [
-    scatterMode === 'run'
-      ? 'one point per run'
-      : `one point per ${bucketWidth}, ${plottedBucketRuns} ${plottedBucketRuns === 1 ? 'run' : 'runs'}`,
-    scatterMode === 'run' && runsTruncated ? `most recent ${RUN_LIMIT} runs only` : '',
-    scatterUnmeasurable > 0
-      ? `${scatterUnmeasurable} ${scatterUnmeasurable === 1 ? 'run' : 'runs'} had no measurable rate`
+    'one point per run',
+    runsTruncated ? `most recent ${RUN_LIMIT} runs only` : '',
+    unmeasurableRuns > 0
+      ? `${unmeasurableRuns} ${unmeasurableRuns === 1 ? 'run' : 'runs'} had no measurable rate`
       : '',
   ]
     .filter(Boolean)
     .join(' \u00b7 ');
-  $: scatterHeadline =
-    scatterMode === 'run'
-      ? `${runPoints.length} ${runPoints.length === 1 ? 'run' : 'runs'}`
-      : `${bucketPoints.length} ${bucketPoints.length === 1 ? 'bucket' : 'buckets'}`;
+  $: scatterHeadline = `${runPoints.length} ${runPoints.length === 1 ? 'run' : 'runs'}`;
+
+  /** Newest first: the table is the one place every run's numbers are readable at once. */
+  $: tableRuns = [...$taskRuns].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
 
   /** The slowest bucket in the window: the dip a trend view exists to surface. */
   $: slowestP50 = $taskSeries.length
@@ -161,24 +145,11 @@
       magnitude: run.output_tokens,
       label: formatTooltipTimestamp(run.timestamp),
       rows: [
+        { label: 'Model', value: run.model },
         { label: 'Tokens', value: `${run.input_tokens} in / ${run.output_tokens} out` },
         { label: 'TTFT', value: `${run.ttft_seconds.toFixed(2)}s` },
         { label: 'Duration', value: `${run.total_seconds.toFixed(1)}s` },
         { label: 'Finish', value: run.finish_reason },
-      ],
-    };
-  }
-
-  function toBucketPoint(bucket: TaskSeriesBucket): ScatterPoint {
-    return {
-      time: Date.parse(bucket.t),
-      value: bucket.gen_tps_mean,
-      magnitude: bucket.output_tokens,
-      label: formatTooltipTimestamp(bucket.t),
-      rows: [
-        { label: 'Runs', value: `${bucket.count}` },
-        { label: 'p50', value: `${bucket.gen_tps_p50.toFixed(1)} t/s` },
-        { label: 'Tokens', value: `${bucket.total_tokens.toLocaleString('en-GB')} total` },
       ],
     };
   }
@@ -264,7 +235,7 @@
             </button>
           {/each}
         </div>
-        <button class="ops-button" type="button" on:click={() => loadSeries()} disabled={$seriesLoading}>
+        <button class="ops-button" type="button" on:click={() => loadSeries(undefined, { refreshCeiling: true })} disabled={$seriesLoading}>
           <RefreshCw class="h-4 w-4 {$seriesLoading ? 'animate-spin' : ''}" />
           Refresh
         </button>
@@ -392,21 +363,60 @@
     {:else}
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div class="xl:col-span-2">
-          <ChartPanel title="Generation Speed" value={scatterPoints.length ? `${rangeLabel($historyRange)} - ${scatterHeadline}` : 'No runs'}>
+          <ChartPanel title="Generation Speed" value={runPoints.length ? `${rangeLabel($historyRange)} - ${scatterHeadline}` : 'No runs'}>
             <SvgScatterChart
-              title={scatterMode === 'run' ? 'Generation speed per run' : 'Mean generation speed per bucket'}
-              points={scatterPoints}
+              title="Generation speed per run"
+              points={runPoints}
               {tickFormat}
-              start={scatterWindow.start}
-              end={scatterWindow.end}
               unit=" t/s"
               color="#d8ff00"
               heightClass="h-64"
-              sizeLabel={scatterMode === 'run' ? 'output tokens' : `output tokens per ${bucketWidth}`}
-              valueLabel={scatterMode === 'run' ? '' : 'mean'}
+              magnitudeCeiling={$magnitudeCeiling ?? 0}
+              keySteps={$magnitudeKeySteps}
+              sizeLabel="output tokens"
               footnote={scatterFootnote}
             />
           </ChartPanel>
+
+          <details class="ops-panel mt-3">
+            <summary class="cursor-pointer select-none px-4 py-3 text-sm text-muted-foreground hover:text-foreground">
+              Show all runs
+            </summary>
+            <div class="max-h-[480px] overflow-auto border-t border-[#34382d]">
+              <table class="w-full text-left text-xs">
+                <thead class="sticky top-0 bg-[#171918]">
+                  <tr class="text-muted-foreground">
+                    <th class="px-3 py-2 font-normal">Time</th>
+                    <th class="px-3 py-2 font-normal">Model</th>
+                    <th class="px-3 py-2 text-right font-normal">In</th>
+                    <th class="px-3 py-2 text-right font-normal">Out</th>
+                    <th class="px-3 py-2 text-right font-normal">TTFT</th>
+                    <th class="px-3 py-2 text-right font-normal">Duration</th>
+                    <th class="px-3 py-2 text-right font-normal">t/s</th>
+                    <th class="px-3 py-2 font-normal">Finish</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each tableRuns as run}
+                    <tr class="border-t border-[#22241f]">
+                      <td class="whitespace-nowrap px-3 py-1.5">{formatTooltipTimestamp(run.timestamp)}</td>
+                      <td class="px-3 py-1.5">{run.model}</td>
+                      <td class="ops-mono px-3 py-1.5 text-right tabular-nums">{run.input_tokens}</td>
+                      <td class="ops-mono px-3 py-1.5 text-right tabular-nums">{run.output_tokens}</td>
+                      <td class="ops-mono px-3 py-1.5 text-right tabular-nums">{run.ttft_seconds.toFixed(2)}s</td>
+                      <td class="ops-mono px-3 py-1.5 text-right tabular-nums">{run.total_seconds.toFixed(1)}s</td>
+                      <td class="ops-mono px-3 py-1.5 text-right tabular-nums">{run.gen_tps > 0 ? run.gen_tps.toFixed(1) : '--'}</td>
+                      <td class="px-3 py-1.5">{run.finish_reason}</td>
+                    </tr>
+                  {:else}
+                    <tr>
+                      <td class="px-3 py-4 text-muted-foreground" colspan="8">No runs in this window.</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          </details>
         </div>
 
         <ChartPanel title="Generation p50" value={slowestP50 !== null ? `low ${slowestP50.toFixed(1)} t/s` : 'No runs'}>
