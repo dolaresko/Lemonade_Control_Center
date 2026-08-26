@@ -105,8 +105,9 @@ class TaskHistory:
     def count(self) -> int:
         return self._store.count_tasks()
 
-    def clear(self) -> None:
-        self._store.clear()
+    def clear(self) -> dict[str, int]:
+        """Wipe the persisted history, returning the rows removed per table."""
+        return self._store.clear()
 
     def export_csv(
         self,

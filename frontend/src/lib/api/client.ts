@@ -41,9 +41,12 @@ import type {
   ProfileConfig,
   SmartRecommendation,
   RunEvidenceSeed,
+  MetricsClearResponse,
+  MetricsHistorySummary,
   SeriesResponse,
   SmokeTestResponse,
   TaskRecord,
+  TaskScaleResponse,
   TaskSeriesBucket,
   TelemetrySnapshot,
   IntakeProfileResponse,
@@ -314,7 +317,22 @@ export const api = {
       get<SeriesResponse<TaskSeriesBucket>>(`/metrics/tasks/series?range=${range}`),
     hardwareSeries: (range: HistoryRange) =>
       get<SeriesResponse<HardwareSeriesBucket>>(`/metrics/hardware/series?range=${range}`),
-    clear: () => post<{ cleared: boolean }>('/metrics/clear'),
+    /**
+     * The scatter's fixed size ceiling, as one number.
+     *
+     * Deliberately not derived client-side any more: doing that meant pulling
+     * a whole 30d of runs down on every load purely to reduce them to a p95.
+     */
+    taskScale: (range: HistoryRange = '30d', quantile = 0.95) =>
+      get<TaskScaleResponse>(`/metrics/tasks/scale?range=${range}&quantile=${quantile}`),
+    historySummary: () => get<MetricsHistorySummary>('/metrics/history/summary'),
+    /**
+     * `scope` is required by the backend: 'buffer' empties the live ring only,
+     * 'history' additionally drops the persisted tables. Omitting it is a 400,
+     * not a wipe.
+     */
+    clear: (scope: 'buffer' | 'history') =>
+      post<MetricsClearResponse>(`/metrics/clear?scope=${scope}`),
     tasksCsvUrl: (range?: HistoryRange) =>
       `${BASE}${withLccKey(`/metrics/tasks/csv${range ? `?range=${range}` : ''}`)}`,
   },

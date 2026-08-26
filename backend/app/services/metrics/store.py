@@ -249,6 +249,69 @@ class MetricsStore:
         """Time-bucketed task aggregates over a window."""
         return bucket_task_rows(self._task_rows_in_window(start, end), bucket_seconds)
 
+    def output_token_percentile(
+        self,
+        start: datetime,
+        end: datetime,
+        fraction: float = 0.95,
+    ) -> dict:
+        """One percentile of output_tokens over a window.
+
+        The scatter's size scale needs a single scalar, not every row: shipping
+        30 days of runs to the client to compute one number was a full history
+        transfer per page load. Only the column that feeds the percentile is
+        read, and the aggregation reuses the same nearest-rank `percentile`
+        the series summaries use, so the two never drift apart.
+
+        Zero-token rows are excluded: a run that produced nothing carries no
+        magnitude and would drag the percentile down.
+        """
+
+        def run(connection: sqlite3.Connection) -> list[int]:
+            return [
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT output_tokens FROM task_records"
+                    " WHERE ts_epoch >= ? AND ts_epoch <= ? AND output_tokens > 0",
+                    (start.timestamp(), end.timestamp()),
+                ).fetchall()
+            ]
+
+        values = self._read(run)
+        return {
+            "count": len(values),
+            # None, not 0: an empty window has no ceiling, and a zero one would
+            # make every mark render at maximum radius.
+            "value": percentile([float(value) for value in values], fraction) if values else None,
+        }
+
+    def history_summary(self) -> dict:
+        """Row counts and the oldest timestamp in each table.
+
+        Backs the delete-history confirmation, which has to state what is about
+        to be destroyed rather than guess at it.
+        """
+
+        def run(connection: sqlite3.Connection) -> dict:
+            tasks = connection.execute("SELECT COUNT(*) FROM task_records").fetchone()[0]
+            hardware = connection.execute(
+                "SELECT COUNT(*) FROM hardware_samples"
+            ).fetchone()[0]
+            oldest_task = connection.execute(
+                "SELECT timestamp FROM task_records ORDER BY ts_epoch ASC, id ASC LIMIT 1"
+            ).fetchone()
+            oldest_hardware = connection.execute(
+                "SELECT timestamp FROM hardware_samples ORDER BY ts_epoch ASC, id ASC LIMIT 1"
+            ).fetchone()
+            return {
+                "tasks": tasks,
+                "hardware": hardware,
+                "oldest_task": oldest_task[0] if oldest_task else None,
+                "oldest_hardware": oldest_hardware[0] if oldest_hardware else None,
+            }
+
+        return self._read(run)
+
     def task_window(
         self,
         start: datetime,
@@ -373,14 +436,19 @@ class MetricsStore:
 
         return self._write(run)
 
-    def clear(self) -> None:
-        """Wipe both series. Backs the operator-facing Clear action."""
+    def clear(self) -> dict[str, int]:
+        """Wipe both series, reporting the rows removed.
 
-        def run(connection: sqlite3.Connection) -> None:
-            connection.execute("DELETE FROM task_records")
-            connection.execute("DELETE FROM hardware_samples")
+        The caller shows those counts back to the operator: an irreversible
+        delete that answers "done" tells them nothing about what it took.
+        """
 
-        self._write(run)
+        def run(connection: sqlite3.Connection) -> dict[str, int]:
+            tasks = connection.execute("DELETE FROM task_records").rowcount
+            hardware = connection.execute("DELETE FROM hardware_samples").rowcount
+            return {"tasks": max(0, tasks), "hardware": max(0, hardware)}
+
+        return self._write(run)
 
     def get_meta(self, key: str) -> str | None:
         row = self._read(

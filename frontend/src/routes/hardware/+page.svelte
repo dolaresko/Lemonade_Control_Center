@@ -1,13 +1,15 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { Download, Pause, Play, RefreshCw, Trash2 } from 'lucide-svelte';
+  import { Download, Eraser, Pause, Play, RefreshCw, Trash2 } from 'lucide-svelte';
   import ChartPanel from '$lib/components/hardware/ChartPanel.svelte';
   import SvgBarChart from '$lib/components/hardware/SvgBarChart.svelte';
   import SvgLineChart from '$lib/components/hardware/SvgLineChart.svelte';
   import SvgScatterChart from '$lib/components/hardware/SvgScatterChart.svelte';
+  import DeleteHistoryDialog from '$lib/components/hardware/DeleteHistoryDialog.svelte';
   import {
-    clearMetricsHistory,
+    clearLiveBuffer,
     connectMetricsWs,
+    deleteMetricsHistory,
     disconnectMetricsWs,
     exportTasksCsv,
     hardwareSeries,
@@ -37,7 +39,13 @@
     toggleMetricsPause,
   } from '$lib/stores/metrics';
   import { formatTooltipTimestamp, type ScatterPoint } from '$lib/utils/chart';
-  import type { HistoryRange, MetricPoint, TaskRecord, TimeRange } from '$lib/types';
+  import type {
+    HistoryRange,
+    MetricPoint,
+    MetricsHistorySummary,
+    TaskRecord,
+    TimeRange,
+  } from '$lib/types';
   import type { TelemetrySnapshot } from '$lib/types';
   import { api } from '$lib/api/client';
 
@@ -59,6 +67,33 @@
     if (!$seriesLoaded) loadSeries();
   }
 
+  // ── Delete history ──
+  // The counts in the confirmation are read from the backend first: this drops
+  // every persisted row, not just the range currently on screen.
+  let deleteOpen = false;
+  let deleting = false;
+  let historySummary: MetricsHistorySummary | null = null;
+
+  async function promptDeleteHistory() {
+    const result = await api.metrics.historySummary();
+    historySummary = result.ok ? result.data : null;
+    deleteOpen = true;
+  }
+
+  async function confirmDeleteHistory() {
+    deleting = true;
+    await deleteMetricsHistory();
+    deleting = false;
+    deleteOpen = false;
+    historySummary = null;
+  }
+
+  function cancelDeleteHistory() {
+    if (deleting) return;
+    deleteOpen = false;
+    historySummary = null;
+  }
+
   async function loadTelemetryProviders() {
     const result = await api.system.telemetry();
     telemetry = result.ok ? result.data : null;
@@ -72,8 +107,14 @@
   $: ramValues = $timeSeriesData.map((point) => point.ram_used);
   $: ramTotal = latest($timeSeriesData)?.ram_total ?? 0;
   $: cpuValues = $timeSeriesData.map((point) => point.cpu_pct);
-  $: gpuValues = $timeSeriesData.map((point) => point.gpu_load_pct).filter((value): value is number => typeof value === 'number');
-  $: tempValues = $timeSeriesData.map(primaryTemperature).filter((value): value is number => typeof value === 'number');
+  // GPU and thermal readings are absent on some samples, so their series are
+  // shorter than the shared label list. The x axis reads its label by index,
+  // which means a filtered series has to carry labels filtered in step or
+  // every tick names the wrong moment.
+  $: gpuSeries = presentSamples($timeSeriesData, (point) => point.gpu_load_pct);
+  $: tempSeries = presentSamples($timeSeriesData, primaryTemperature);
+  $: gpuValues = gpuSeries.values;
+  $: tempValues = tempSeries.values;
   $: gpuTempValues = $timeSeriesData.map((point) => point.gpu_temp_c).filter((value): value is number => typeof value === 'number');
   $: tpsValues = $taskHistory.map((task) => task.gen_tps);
   $: ttftValues = $taskHistory.map((task) => task.ttft_seconds);
@@ -166,6 +207,22 @@
     return new Date(parseMetricTimestamp(point.t)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  /** Values that were actually sampled, paired with their own clock labels. */
+  function presentSamples(
+    points: MetricPoint[],
+    pick: (point: MetricPoint) => number | null | undefined,
+  ): { values: number[]; labels: string[] } {
+    const values: number[] = [];
+    const stamps: string[] = [];
+    for (const point of points) {
+      const value = pick(point);
+      if (typeof value !== 'number') continue;
+      values.push(value);
+      stamps.push(formatTime(point));
+    }
+    return { values, labels: stamps };
+  }
+
   function primaryTemperature(point: MetricPoint): number | null {
     const values = Object.values(point.temps);
     if (values.length === 0) return null;
@@ -245,10 +302,21 @@
         <Download class="h-4 w-4" />
         Export CSV
       </button>
-      <button class="ops-button ops-button-danger" type="button" on:click={clearMetricsHistory}>
-        <Trash2 class="h-4 w-4" />
-        Clear
-      </button>
+
+      {#if view === 'live'}
+        <!-- Buffer only: the stream refills in seconds, so no confirmation. -->
+        <button class="ops-button" type="button" on:click={clearLiveBuffer} title="Empty the live graph buffer. Stored history is not affected.">
+          <Eraser class="h-4 w-4" />
+          Clear
+        </button>
+      {:else}
+        <!-- Held apart from Refresh and Export: this one is irreversible. -->
+        <div class="mx-1 w-px self-stretch bg-[#444936]" aria-hidden="true"></div>
+        <button class="ops-button ops-button-danger" type="button" on:click={promptDeleteHistory}>
+          <Trash2 class="h-4 w-4" />
+          Delete history
+        </button>
+      {/if}
     </div>
   </div>
 
@@ -296,32 +364,32 @@
   {#if view === 'live'}
   <section class="grid grid-cols-1 gap-4 xl:grid-cols-2">
     <ChartPanel title="RAM" value={latest($timeSeriesData) ? `${latest($timeSeriesData)?.ram_used.toFixed(1)} / ${latest($timeSeriesData)?.ram_total.toFixed(1)} GB` : 'No data'}>
-      <SvgLineChart title="RAM usage" values={ramValues} {labels} yMax={ramTotal || null} unit=" GB" />
+      <SvgLineChart title="RAM usage" values={ramValues} {labels} axes interactive showFooter={false} yMax={ramTotal || null} unit=" GB" />
     </ChartPanel>
 
     <ChartPanel title="CPU" value={latest($timeSeriesData) ? `${latest($timeSeriesData)?.cpu_pct.toFixed(1)}%` : 'No data'}>
-      <SvgLineChart title="CPU usage" values={cpuValues} {labels} yMax={100} unit="%" color="#40f078" />
+      <SvgLineChart title="CPU usage" values={cpuValues} {labels} axes interactive showFooter={false} yMax={100} unit="%" color="#40f078" />
     </ChartPanel>
 
     <ChartPanel title="Temperature" value={tempValues.at(-1) !== undefined ? `${tempValues.at(-1)?.toFixed(1)} C` : 'No sensors'}>
-      <SvgLineChart title="Temperature" values={tempValues} {labels} yMax={100} unit=" C" color="#f2c94c" />
+      <SvgLineChart title="Temperature" values={tempValues} labels={tempSeries.labels} axes interactive showFooter={false} yMax={100} unit=" C" color="#f2c94c" />
     </ChartPanel>
 
     <ChartPanel title="GPU Load" value={gpuValues.at(-1) !== undefined ? `${gpuValues.at(-1)?.toFixed(1)}%${gpuTempValues.at(-1) !== undefined ? ` / ${gpuTempValues.at(-1)?.toFixed(1)} C` : ''}` : 'No data'}>
-      <SvgLineChart title="GPU load" values={gpuValues} {labels} yMax={100} unit="%" color="#ffb84d" />
+      <SvgLineChart title="GPU load" values={gpuValues} labels={gpuSeries.labels} axes interactive showFooter={false} yMax={100} unit="%" color="#ffb84d" />
     </ChartPanel>
 
     <ChartPanel title="TPS per Task" value={tpsValues.at(-1) !== undefined ? `${tpsValues.at(-1)?.toFixed(1)} t/s` : 'No tasks'}>
-      <SvgBarChart title="TPS per task" values={tpsValues} labels={taskLabels} unit=" t/s" color="#d8ff00" />
+      <SvgBarChart title="TPS per task" values={tpsValues} labels={taskLabels} axes interactive showFooter={false} unit=" t/s" color="#d8ff00" />
     </ChartPanel>
 
     <ChartPanel title="TTFT per Task" value={ttftValues.at(-1) !== undefined ? `${ttftValues.at(-1)?.toFixed(2)}s` : 'No tasks'}>
-      <SvgBarChart title="TTFT per task" values={ttftValues} labels={taskLabels} unit="s" color="#ffb0a8" />
+      <SvgBarChart title="TTFT per task" values={ttftValues} labels={taskLabels} axes interactive showFooter={false} unit="s" color="#ffb0a8" />
     </ChartPanel>
 
     <div class="xl:col-span-2">
       <ChartPanel title="Token Throughput" value={throughputValues.at(-1) !== undefined ? `${throughputValues.at(-1)} output tokens` : 'No tasks'}>
-        <SvgLineChart title="Output tokens per task" values={throughputValues} labels={taskLabels} color="#efff7a" />
+        <SvgLineChart title="Output tokens per task" values={throughputValues} labels={taskLabels} axes interactive showFooter={false} color="#efff7a" />
       </ChartPanel>
     </div>
   </section>
@@ -455,3 +523,11 @@
   </section>
   {/if}
 </div>
+
+<DeleteHistoryDialog
+  open={deleteOpen}
+  summary={historySummary}
+  busy={deleting}
+  onConfirm={confirmDeleteHistory}
+  onCancel={cancelDeleteHistory}
+/>

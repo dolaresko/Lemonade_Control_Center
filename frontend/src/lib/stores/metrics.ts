@@ -1,7 +1,7 @@
-import { get, writable } from 'svelte/store';
+import { derived, get, writable } from 'svelte/store';
 import { api, withLccKey } from '$lib/api/client';
 import { notify } from '$lib/stores/notifications';
-import { percentile, sizeKeySteps } from '$lib/utils/chart';
+import { sizeKeyFromCeiling } from '$lib/utils/chart';
 import type {
   HardwareSeriesBucket,
   HistoryRange,
@@ -64,13 +64,37 @@ export const RUN_LIMIT = 5000;
 /**
  * Stable reference for the scatter's size encoding: the p95 of output_tokens
  * over the whole 30d history, so a run's mark is the same size on every
- * range. Fetched once and cached here rather than recomputed per range
- * switch -- see loadMagnitudeCeiling.
+ * range. The backend reduces the window to this one number -- see
+ * loadMagnitudeCeiling.
  */
 export const magnitudeCeiling = writable<number | null>(null);
-/** Size-key reference values, drawn from the same fixed 30d sample. */
-export const magnitudeKeySteps = writable<number[]>([]);
-let magnitudeCeilingLoaded = false;
+
+/**
+ * Size-key reference values.
+ *
+ * Derived from the ceiling rather than stored alongside it, because the key's
+ * circles are drawn against the ceiling: any other source can only disagree
+ * with what the plot actually renders.
+ */
+export const magnitudeKeySteps = derived(magnitudeCeiling, (ceiling) =>
+  ceiling === null ? [] : sizeKeyFromCeiling(ceiling),
+);
+
+/** The window the fixed scale is measured over, whatever range is on screen. */
+const MAGNITUDE_RANGE: HistoryRange = '30d';
+
+/**
+ * How long a cached ceiling stays trustworthy.
+ *
+ * "Do not recompute per range switch" is not "never recompute": a scale cached
+ * at session start goes stale as new work lands, and every larger run then
+ * pins silently to maximum radius. Ten minutes is far longer than a burst of
+ * tab switches and far shorter than a working day.
+ */
+const MAGNITUDE_TTL_MS = 10 * 60 * 1000;
+
+let magnitudeFetchedAt = 0;
+let magnitudeInFlight: Promise<void> | null = null;
 
 /** Chart axis labels: clock time for short windows, calendar dates for long ones. */
 export function rangeTickFormat(range: HistoryRange): 'time' | 'date' {
@@ -179,34 +203,38 @@ export async function loadSeries(
   seriesLoaded.set(true);
 }
 
+/** True while the cached ceiling is still inside its TTL. */
+function magnitudeCacheFresh(): boolean {
+  return magnitudeFetchedAt > 0 && Date.now() - magnitudeFetchedAt < MAGNITUDE_TTL_MS;
+}
+
 /**
- * Refresh the scatter's fixed size scale from the whole 30d history.
+ * Refresh the scatter's fixed size scale.
  *
- * Guarded so a plain range switch never re-fetches it: `force` is only passed
- * from an explicit user refresh, and the very first load always runs because
- * nothing has been cached yet.
+ * Age-based, not switch-based: a range switch inside the TTL is served from
+ * cache and issues no request at all, while a session left open past the TTL
+ * picks the new ceiling up on its next load. `force` is the explicit Refresh
+ * button, which never waits for the clock.
  */
 export async function loadMagnitudeCeiling(force = false): Promise<void> {
-  if (magnitudeCeilingLoaded && !force) return;
-  const until = new Date();
-  const since = new Date(until.getTime() - RANGE_MS['30d']);
-  const result = await api.metrics.tasksWindow({
-    since: since.toISOString(),
-    until: until.toISOString(),
-    n: RUN_LIMIT,
-  });
-  // Keep whatever ceiling is already cached rather than blank the scale on a
-  // transient failure.
-  if (!result.ok) return;
+  if (!force && magnitudeCacheFresh()) return;
+  // Two loads arriving together share one request rather than racing.
+  if (magnitudeInFlight && !force) return magnitudeInFlight;
 
-  const magnitudes = result.data.tasks
-    .map((task) => task.output_tokens)
-    .filter((value): value is number => Number.isFinite(value) && value > 0)
-    .sort((a, b) => a - b);
+  magnitudeInFlight = (async () => {
+    const result = await api.metrics.taskScale(MAGNITUDE_RANGE, 0.95);
+    // Keep whatever ceiling is already cached rather than blank the scale on a
+    // transient failure; the stale scale still reads better than none.
+    if (!result.ok) return;
+    magnitudeCeiling.set(result.data.output_tokens);
+    magnitudeFetchedAt = Date.now();
+  })();
 
-  magnitudeCeiling.set(magnitudes.length ? percentile(magnitudes, 0.95) : null);
-  magnitudeKeySteps.set(sizeKeySteps(magnitudes));
-  magnitudeCeilingLoaded = true;
+  try {
+    await magnitudeInFlight;
+  } finally {
+    magnitudeInFlight = null;
+  }
 }
 
 export function setHistoryRange(range: HistoryRange): void {
@@ -223,24 +251,53 @@ export function toggleMetricsPause(): void {
   metricsPaused.update((value) => !value);
 }
 
-export async function clearMetricsHistory(): Promise<void> {
-  const result = await api.metrics.clear();
-  if (result.ok) {
-    timeSeriesData.set([]);
-    taskHistory.set([]);
-    taskSeries.set([]);
-    taskSeriesSummary.set(null);
-    taskRuns.set([]);
-    hardwareSeries.set([]);
-    taskWindow.set(EMPTY_WINDOW);
-    hardwareWindow.set(EMPTY_WINDOW);
-    magnitudeCeiling.set(null);
-    magnitudeKeySteps.set([]);
-    magnitudeCeilingLoaded = false;
-    notify.info('Metrics cleared', 'Hardware and task history buffers were cleared.');
-  } else {
-    notify.error('Clear metrics failed', result.error);
+/**
+ * Empty the live ring buffer only.
+ *
+ * Cheap and reversible -- the stream refills within seconds -- so it needs no
+ * confirmation. The persisted history is untouched, which is why the task
+ * table below the graphs keeps its rows.
+ */
+export async function clearLiveBuffer(): Promise<void> {
+  const result = await api.metrics.clear('buffer');
+  if (!result.ok) {
+    notify.error('Clear failed', result.error);
+    return;
   }
+  timeSeriesData.set([]);
+  notify.info('Live buffer cleared', 'The stream will refill as new samples arrive.');
+}
+
+/**
+ * Delete the persisted history: both SQLite tables, irreversibly.
+ *
+ * Callers must confirm first -- this used to hide behind the same one-word
+ * "Clear" button as the buffer reset above.
+ */
+export async function deleteMetricsHistory(): Promise<void> {
+  const result = await api.metrics.clear('history');
+  if (!result.ok) {
+    notify.error('Delete history failed', result.error);
+    return;
+  }
+  timeSeriesData.set([]);
+  taskHistory.set([]);
+  taskSeries.set([]);
+  taskSeriesSummary.set(null);
+  taskRuns.set([]);
+  hardwareSeries.set([]);
+  taskWindow.set(EMPTY_WINDOW);
+  hardwareWindow.set(EMPTY_WINDOW);
+  magnitudeCeiling.set(null);
+  magnitudeFetchedAt = 0;
+
+  const deleted = result.data.deleted;
+  notify.info(
+    'History deleted',
+    deleted
+      ? `Removed ${deleted.tasks} task ${deleted.tasks === 1 ? 'record' : 'records'} and ${deleted.hardware} hardware ${deleted.hardware === 1 ? 'sample' : 'samples'}.`
+      : 'The persisted history was removed.',
+  );
 }
 
 export function exportTasksCsv(range?: HistoryRange): void {

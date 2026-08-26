@@ -76,6 +76,33 @@ async def get_tasks_series(
     }
 
 
+@router.get("/tasks/scale")
+async def get_tasks_scale(
+    range: str = Query(default="30d", description="|".join(RANGE_WINDOWS)),
+    quantile: float = Query(default=0.95, gt=0.0, le=1.0),
+):
+    """One percentile of output_tokens over a window.
+
+    The scatter sizes each mark against a fixed ceiling. Computing it in the
+    browser meant downloading every run in the window just to reduce it to a
+    single number; the store reads one column and reduces it here instead.
+    """
+    key, window, _bucket_seconds = resolve_range(range)
+    end = datetime.now(timezone.utc)
+    start = end - window
+    result = await asyncio.to_thread(
+        task_history.store.output_token_percentile, start, end, quantile
+    )
+    return {
+        "range": key,
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "quantile": quantile,
+        "output_tokens": result["value"],
+        "count": result["count"],
+    }
+
+
 @router.get("/hardware/series")
 async def get_hardware_series(
     range: str = Query(default="24h", description="|".join(RANGE_WINDOWS)),
@@ -119,11 +146,47 @@ async def export_tasks_csv(
     )
 
 
+# What each scope is allowed to destroy. "buffer" is the in-memory ring the
+# live view streams into and refills within seconds; "history" additionally
+# drops both SQLite tables, which is irreversible.
+CLEAR_SCOPES = ("buffer", "history")
+
+
+@router.get("/history/summary")
+async def get_history_summary():
+    """Row counts and oldest record per table.
+
+    Read before the delete-history confirmation so the prompt can name what it
+    is about to destroy instead of describing it vaguely.
+    """
+    return await asyncio.to_thread(task_history.store.history_summary)
+
+
 @router.post("/clear")
-async def clear_metrics():
+async def clear_metrics(
+    scope: str | None = Query(
+        default=None, description="|".join(CLEAR_SCOPES)
+    ),
+):
+    """Clear metrics at an explicit scope.
+
+    There is deliberately no default. This endpoint used to wipe the whole
+    persisted history under a one-word "Clear" button; an omitted or unknown
+    scope is now a rejection, so no caller can destroy weeks of records by
+    saying nothing.
+    """
+    if scope not in CLEAR_SCOPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scope is required and must be one of: {', '.join(CLEAR_SCOPES)}",
+        )
+
     buffer.clear()
-    await asyncio.to_thread(task_history.clear)
-    return {"cleared": True}
+    if scope == "buffer":
+        return {"cleared": True, "scope": "buffer"}
+
+    deleted = await asyncio.to_thread(task_history.clear)
+    return {"cleared": True, "scope": "history", "deleted": deleted}
 
 
 def _parse_boundary(value: str | None, field: str) -> datetime | None:

@@ -342,42 +342,60 @@ export function markRadius(
   return min + (max - min) * Math.sqrt(ratio);
 }
 
-/** Round to `digits` significant figures, so key labels read as round numbers. */
+/**
+ * Round to `digits` significant figures, so key labels read as round numbers.
+ *
+ * toFixed strips the float drift the final multiply introduces -- without it
+ * two significant figures of 1.2 come back as 1.2000000000000002, which is the
+ * opposite of a readable number.
+ */
 export function roundSignificant(value: number, digits = 2): number {
   if (!Number.isFinite(value) || value === 0) return 0;
   const step = 10 ** (Math.floor(Math.log10(Math.abs(value))) - digits + 1);
-  return Math.round(value / step) * step;
+  return Number((Math.round(value / step) * step).toFixed(10));
+}
+
+/** As roundSignificant, but never downwards. */
+function ceilSignificant(value: number, digits = 2): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const step = 10 ** (Math.floor(Math.log10(value)) - digits + 1);
+  return Number((Math.ceil(value / step) * step).toFixed(10));
 }
 
 /**
- * Reference values for the size key: typical, high, and largest.
+ * Fractions of the ceiling the key's reference circles stand at.
  *
- * Size is a data encoding, and an encoding with no reference is decoration.
- * The steps come from the data actually plotted -- a key whose largest circle
- * is bigger than anything on the chart would be misleading in the other
- * direction.
+ * markRadius scales by the square root, so these land at radii of roughly
+ * 9 / 11.8 / 14 px -- three sizes a reader can tell apart at a glance. Evenly
+ * spaced *values* would not do that: 33% and 66% of the ceiling differ by
+ * under 3px of radius at the small end.
  */
-export function sizeKeySteps(magnitudes: number[]): number[] {
-  const sorted = magnitudes
-    .filter((value) => Number.isFinite(value) && value > 0)
-    .sort((a, b) => a - b);
-  if (sorted.length === 0) return [];
+const SIZE_KEY_FRACTIONS = [0.25, 0.6, 1];
 
-  const largest = sorted[sorted.length - 1];
-  const at = (fraction: number) => sorted[Math.round(fraction * (sorted.length - 1))];
+/**
+ * Reference values for the size key, derived from the scale's own ceiling.
+ *
+ * Deriving them from the plotted sample instead was the bug this replaces:
+ * markRadius clamps at the ceiling, so every sampled value at or above it drew
+ * at exactly MARK_RADIUS_MAX and the key rendered two identical circles. The
+ * fractions below are of the ceiling, which is what the radii are measured
+ * against, so each entry is guaranteed a distinct size.
+ *
+ * The top entry rounds *up*, so it is at or above the ceiling and therefore
+ * draws at exactly the radius the plot's largest marks draw -- the key reads
+ * directly off the chart rather than approximating it.
+ */
+export function sizeKeyFromCeiling(ceiling: number): number[] {
+  if (!Number.isFinite(ceiling) || ceiling <= 0) return [];
   const steps: number[] = [];
-  // Largest first: the biggest mark on the chart must always be in the key,
-  // and it is the smaller entries that give way when the spread is narrow.
-  for (const raw of [largest, at(0.95), at(0.5)]) {
-    const rounded = roundSignificant(raw, 2);
-    if (rounded <= 0 || steps.includes(rounded)) continue;
-    // Two circles a reader cannot tell apart teach nothing, so an entry has to
-    // earn its place by being visibly a different size.
-    const radius = markRadius(rounded, largest);
-    if (steps.some((step) => Math.abs(markRadius(step, largest) - radius) < 2)) continue;
-    steps.push(rounded);
+  for (const fraction of SIZE_KEY_FRACTIONS) {
+    const step =
+      fraction >= 1 ? ceilSignificant(ceiling, 2) : roundSignificant(ceiling * fraction, 2);
+    // Rounding can collapse two fractions onto the same readable number; a
+    // repeated entry is dropped rather than drawn twice.
+    if (step > 0 && !steps.includes(step)) steps.push(step);
   }
-  return steps.sort((left, right) => left - right);
+  return steps;
 }
 
 /**
@@ -461,17 +479,6 @@ export function thinTicks(
     kept[kept.length - 1] = last;
   }
   return kept;
-}
-
-/** p-th percentile (0..1) over an ascending array, interpolated between ranks. */
-export function percentile(sortedAscending: number[], p: number): number {
-  if (sortedAscending.length === 0) return 0;
-  if (sortedAscending.length === 1) return sortedAscending[0];
-  const rank = p * (sortedAscending.length - 1);
-  const lower = Math.floor(rank);
-  const upper = Math.ceil(rank);
-  if (lower === upper) return sortedAscending[lower];
-  return sortedAscending[lower] + (sortedAscending[upper] - sortedAscending[lower]) * (rank - lower);
 }
 
 /** "hour", "6 hours", "day" -- how wide one bucket is, for the footer note. */

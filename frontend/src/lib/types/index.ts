@@ -779,6 +779,32 @@ export interface SeriesResponse<T> {
   summary?: TaskSeriesSummary;
 }
 
+/** The scatter's fixed size ceiling, computed server-side. */
+export interface TaskScaleResponse {
+  range: HistoryRange;
+  start: string;
+  end: string;
+  quantile: number;
+  /** null when the window holds no runs -- there is no ceiling to draw against. */
+  output_tokens: number | null;
+  count: number;
+}
+
+/** What a history delete is about to destroy, read before the confirmation. */
+export interface MetricsHistorySummary {
+  tasks: number;
+  hardware: number;
+  oldest_task: string | null;
+  oldest_hardware: string | null;
+}
+
+export interface MetricsClearResponse {
+  cleared: boolean;
+  scope: 'buffer' | 'history';
+  /** Rows actually removed; present only for the 'history' scope. */
+  deleted?: { tasks: number; hardware: number };
+}
+
 // ═══════════════════════════════════════════════
 // Bench Lab Types (M13)
 // ═══════════════════════════════════════════════
