@@ -286,3 +286,141 @@ function toDate(value: string | undefined): Date | null {
   const moment = new Date(value);
   return Number.isNaN(moment.getTime()) ? null : moment;
 }
+
+// ═══════════════════════════════════════════════
+// Scatter marks
+// ═══════════════════════════════════════════════
+
+/** One labelled line in a scatter tooltip. */
+export interface ScatterRow {
+  label: string;
+  value: string;
+}
+
+/**
+ * One mark on a scatter plot. The caller formats everything the tooltip shows,
+ * because only it knows whether a point is a single run or a bucket of them.
+ */
+export interface ScatterPoint {
+  /** Epoch milliseconds; the x position. */
+  time: number;
+  /** The y value, in whatever unit the chart carries. */
+  value: number;
+  /** Encoded as the mark's AREA -- see markRadius. */
+  magnitude: number;
+  /** Tooltip heading, already formatted. */
+  label: string;
+  /** Tooltip detail rows. */
+  rows: ScatterRow[];
+}
+
+/** Mark radii, in CSS pixels. Below 4px a dot stops reading as a dot; above
+ *  14px the largest runs start swallowing their neighbours. */
+export const MARK_RADIUS_MIN = 4;
+export const MARK_RADIUS_MAX = 14;
+
+/** Pointer slack for hit testing, in CSS pixels. */
+export const MARK_HIT_RADIUS = 24;
+
+/**
+ * Radius of a mark whose AREA carries `magnitude`.
+ *
+ * Area grows with the square of the radius, so the radius has to grow with the
+ * square root of the value. Scaling the radius linearly instead would draw a
+ * run with 20x the tokens of another one 400x as large, which reads as a far
+ * bigger difference than the data holds.
+ */
+export function markRadius(
+  magnitude: number,
+  magnitudeMax: number,
+  min = MARK_RADIUS_MIN,
+  max = MARK_RADIUS_MAX,
+): number {
+  if (!Number.isFinite(magnitude) || magnitude <= 0) return min;
+  if (!Number.isFinite(magnitudeMax) || magnitudeMax <= 0) return min;
+  const ratio = Math.min(magnitude / magnitudeMax, 1);
+  return min + (max - min) * Math.sqrt(ratio);
+}
+
+/** Round to `digits` significant figures, so key labels read as round numbers. */
+export function roundSignificant(value: number, digits = 2): number {
+  if (!Number.isFinite(value) || value === 0) return 0;
+  const step = 10 ** (Math.floor(Math.log10(Math.abs(value))) - digits + 1);
+  return Math.round(value / step) * step;
+}
+
+/**
+ * Reference values for the size key: typical, high, and largest.
+ *
+ * Size is a data encoding, and an encoding with no reference is decoration.
+ * The steps come from the data actually plotted -- a key whose largest circle
+ * is bigger than anything on the chart would be misleading in the other
+ * direction.
+ */
+export function sizeKeySteps(magnitudes: number[]): number[] {
+  const sorted = magnitudes
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((a, b) => a - b);
+  if (sorted.length === 0) return [];
+
+  const largest = sorted[sorted.length - 1];
+  const at = (fraction: number) => sorted[Math.round(fraction * (sorted.length - 1))];
+  const steps: number[] = [];
+  // Largest first: the biggest mark on the chart must always be in the key,
+  // and it is the smaller entries that give way when the spread is narrow.
+  for (const raw of [largest, at(0.95), at(0.5)]) {
+    const rounded = roundSignificant(raw, 2);
+    if (rounded <= 0 || steps.includes(rounded)) continue;
+    // Two circles a reader cannot tell apart teach nothing, so an entry has to
+    // earn its place by being visibly a different size.
+    const radius = markRadius(rounded, largest);
+    if (steps.some((step) => Math.abs(markRadius(step, largest) - radius) < 2)) continue;
+    steps.push(rounded);
+  }
+  return steps.sort((left, right) => left - right);
+}
+
+/**
+ * Index of the mark nearest (x, y) within `radius` pixels, or null.
+ *
+ * Hit testing uses a generous radius rather than each mark's own geometry: a
+ * 4px dot is awkward to hit with a mouse and impossible with a thumb, and the
+ * small dots are exactly the short runs a reader wants to inspect.
+ */
+export function nearestMarkIndex(
+  xs: number[],
+  ys: number[],
+  x: number,
+  y: number,
+  radius = MARK_HIT_RADIUS,
+): number | null {
+  let best: number | null = null;
+  let bestDistance = radius * radius;
+  for (let index = 0; index < xs.length; index += 1) {
+    const dx = xs[index] - x;
+    const dy = ys[index] - y;
+    const distance = dx * dx + dy * dy;
+    // <= keeps the later of two coincident marks, which is the one drawn on
+    // top and therefore the one under the pointer.
+    if (distance <= bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  }
+  return best;
+}
+
+/** "hour", "6 hours", "day" -- how wide one bucket is, for the footer note. */
+export function formatBucketWidth(seconds: number | null): string {
+  if (!seconds || seconds <= 0) return 'bucket';
+  if (seconds % 86_400 === 0) {
+    const days = seconds / 86_400;
+    return days === 1 ? 'day' : `${days} days`;
+  }
+  if (seconds % 3_600 === 0) {
+    const hours = seconds / 3_600;
+    return hours === 1 ? 'hour' : `${hours} hours`;
+  }
+  const minutes = Math.round(seconds / 60);
+  return minutes === 1 ? 'minute' : `${minutes} minutes`;
+}

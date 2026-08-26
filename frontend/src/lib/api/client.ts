@@ -297,6 +297,19 @@ export const api = {
     history: (minutes = 30) => get<{ points: MetricPoint[]; total: number; retention_minutes: number }>(`/metrics/history?minutes=${minutes}`),
     latest: () => get<{ point: MetricPoint | null }>('/metrics/latest'),
     tasks: (n = 20) => get<{ tasks: TaskRecord[] }>(`/metrics/tasks?n=${n}`),
+    /**
+     * Individual runs inside a window, oldest first.
+     *
+     * URLSearchParams is not optional here: an ISO timestamp carries a "+00:00"
+     * offset, and a raw "+" in a query string decodes as a space, which the
+     * backend then rejects as an unparseable boundary.
+     */
+    tasksWindow: (options: { since?: string; until?: string; n?: number } = {}) => {
+      const query = new URLSearchParams({ n: String(options.n ?? 1000) });
+      if (options.since) query.set('since', options.since);
+      if (options.until) query.set('until', options.until);
+      return get<{ tasks: TaskRecord[] }>(`/metrics/tasks?${query.toString()}`);
+    },
     taskSeries: (range: HistoryRange) =>
       get<SeriesResponse<TaskSeriesBucket>>(`/metrics/tasks/series?range=${range}`),
     hardwareSeries: (range: HistoryRange) =>

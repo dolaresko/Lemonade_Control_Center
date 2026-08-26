@@ -46,9 +46,32 @@ export const seriesLoaded = writable(false);
 
 export const HISTORY_RANGES: HistoryRange[] = ['1h', '24h', '7d', '30d'];
 
+const HOUR_MS = 60 * 60 * 1000;
+const RANGE_MS: Record<HistoryRange, number> = {
+  '1h': HOUR_MS,
+  '24h': 24 * HOUR_MS,
+  '7d': 7 * 24 * HOUR_MS,
+  '30d': 30 * 24 * HOUR_MS,
+};
+
+/** Individual runs, for the ranges the scatter plots one point per run. */
+export const taskRuns = writable<TaskRecord[]>([]);
+export const runWindow = writable<SeriesWindow>(EMPTY_WINDOW);
+
 /** Chart axis labels: clock time for short windows, calendar dates for long ones. */
 export function rangeTickFormat(range: HistoryRange): 'time' | 'date' {
   return range === '1h' || range === '24h' ? 'time' : 'date';
+}
+
+/**
+ * How the generation-speed chart plots a range.
+ *
+ * A run is a discrete event, and on the short ranges there are few enough of
+ * them to draw every one. Over a week the marks would pile into a smear, so
+ * those ranges fall back to one mark per bucket.
+ */
+export function rangeScatterMode(range: HistoryRange): 'run' | 'bucket' {
+  return range === '1h' || range === '24h' ? 'run' : 'bucket';
 }
 
 let ws: WebSocket | null = null;
@@ -109,9 +132,24 @@ export function disconnectMetricsWs(): void {
 export async function loadSeries(range?: HistoryRange): Promise<void> {
   const selected = range ?? get(historyRange);
   seriesLoading.set(true);
-  const [tasks, hardware] = await Promise.allSettled([
+
+  // The window is computed here rather than taken from the series response so
+  // the runs request and the chart domain agree exactly; the series endpoint
+  // derives its own window from the server clock a moment later.
+  const until = new Date();
+  const since = new Date(until.getTime() - RANGE_MS[selected]);
+  const wantRuns = rangeScatterMode(selected) === 'run';
+
+  const [tasks, hardware, runs] = await Promise.allSettled([
     api.metrics.taskSeries(selected),
     api.metrics.hardwareSeries(selected),
+    wantRuns
+      ? api.metrics.tasksWindow({
+          since: since.toISOString(),
+          until: until.toISOString(),
+          n: 1000,
+        })
+      : Promise.resolve(null),
   ]);
 
   // An empty range is a legitimate answer, not a failure: a quiet journal
@@ -125,6 +163,15 @@ export async function loadSeries(range?: HistoryRange): Promise<void> {
     hardware.status === 'fulfilled' && hardware.value.ok ? hardware.value.data : null;
   hardwareSeries.set(hardwareData?.buckets ?? []);
   hardwareWindow.set(toWindow(hardwareData));
+
+  const runData = runs.status === 'fulfilled' && runs.value?.ok ? runs.value.data : null;
+  taskRuns.set(runData?.tasks ?? []);
+  runWindow.set(
+    wantRuns
+      ? { start: since.toISOString(), end: until.toISOString(), bucketSeconds: null }
+      : EMPTY_WINDOW,
+  );
+
   seriesLoading.set(false);
   seriesLoaded.set(true);
 }
@@ -150,9 +197,11 @@ export async function clearMetricsHistory(): Promise<void> {
     taskHistory.set([]);
     taskSeries.set([]);
     taskSeriesSummary.set(null);
+    taskRuns.set([]);
     hardwareSeries.set([]);
     taskWindow.set(EMPTY_WINDOW);
     hardwareWindow.set(EMPTY_WINDOW);
+    runWindow.set(EMPTY_WINDOW);
     notify.info('Metrics cleared', 'Hardware and task history buffers were cleared.');
   } else {
     notify.error('Clear metrics failed', result.error);

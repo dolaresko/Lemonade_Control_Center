@@ -4,6 +4,7 @@
   import ChartPanel from '$lib/components/hardware/ChartPanel.svelte';
   import SvgBarChart from '$lib/components/hardware/SvgBarChart.svelte';
   import SvgLineChart from '$lib/components/hardware/SvgLineChart.svelte';
+  import SvgScatterChart from '$lib/components/hardware/SvgScatterChart.svelte';
   import {
     clearMetricsHistory,
     connectMetricsWs,
@@ -17,12 +18,15 @@
     metricsLoading,
     metricsPaused,
     metricsWsConnected,
+    rangeScatterMode,
     rangeTickFormat,
+    runWindow,
     seriesLoaded,
     seriesLoading,
     setHistoryRange,
     setTimeRange,
     taskHistory,
+    taskRuns,
     taskSeries,
     taskSeriesSummary,
     taskWindow,
@@ -31,11 +35,14 @@
     timeSeriesData,
     toggleMetricsPause,
   } from '$lib/stores/metrics';
-  import type { HistoryRange, MetricPoint, TimeRange } from '$lib/types';
+  import { formatBucketWidth, formatTooltipTimestamp, type ScatterPoint } from '$lib/utils/chart';
+  import type { HistoryRange, MetricPoint, TaskRecord, TaskSeriesBucket, TimeRange } from '$lib/types';
   import type { TelemetrySnapshot } from '$lib/types';
   import { api } from '$lib/api/client';
 
   const ranges: TimeRange[] = [5, 15, 30];
+  /** Ceiling on the runs request; also what the footer reports as truncated. */
+  const RUN_LIMIT = 1000;
   let telemetry: TelemetrySnapshot | null = null;
 
   // The live stream stays the default view; long-run history is opt-in and
@@ -80,7 +87,6 @@
   $: seriesTimestamps = $taskSeries.map((bucket) => bucket.t);
   $: seriesCounts = $taskSeries.map((bucket) => bucket.count);
   $: tickFormat = rangeTickFormat($historyRange);
-  $: seriesTpsMean = $taskSeries.map((bucket) => bucket.gen_tps_mean);
   $: seriesTpsP50 = $taskSeries.map((bucket) => bucket.gen_tps_p50);
   $: seriesTpsP95 = $taskSeries.map((bucket) => bucket.gen_tps_p95);
   $: seriesTtft = $taskSeries.map((bucket) => bucket.ttft_mean);
@@ -99,10 +105,83 @@
   $: hardwareGpuTimestamps = hardwareGpuBuckets.map((bucket) => bucket.t);
   $: hardwareGpuCounts = hardwareGpuBuckets.map((bucket) => bucket.count);
 
+  // ── Generation-speed scatter ──
+  // A run is a discrete event, so it is drawn as one: a mark per run, no line
+  // between them. The long ranges hold too many runs to draw individually and
+  // fall back to a mark per bucket.
+  $: scatterMode = rangeScatterMode($historyRange);
+  $: scatterWindow = scatterMode === 'run' ? $runWindow : $taskWindow;
+  $: bucketWidth = formatBucketWidth($taskWindow.bucketSeconds);
+
+  // A rate of zero is not a slow run, it is a run whose rate could not be
+  // measured -- a one-token completion has no generation interval to divide
+  // by. Plotting those on the baseline would invent a cluster of slow work.
+  $: measurableRuns = $taskRuns.filter((run) => run.gen_tps > 0);
+  $: unmeasurableRuns = $taskRuns.length - measurableRuns.length;
+  $: runPoints = measurableRuns.map(toRunPoint);
+  // The request asks for 1000 runs; a window that fills it may have more.
+  $: runsTruncated = $taskRuns.length >= RUN_LIMIT;
+
+  // The server already drops unmeasurable rates from its aggregates, so a
+  // bucket with a zero mean is a bucket where nothing was measurable at all.
+  $: measurableBuckets = $taskSeries.filter((bucket) => bucket.gen_tps_mean > 0);
+  $: unmeasurableBucketRuns = $taskSeries
+    .filter((bucket) => bucket.gen_tps_mean <= 0)
+    .reduce((total, bucket) => total + bucket.count, 0);
+  $: bucketPoints = measurableBuckets.map(toBucketPoint);
+  $: plottedBucketRuns = measurableBuckets.reduce((total, bucket) => total + bucket.count, 0);
+
+  $: scatterPoints = scatterMode === 'run' ? runPoints : bucketPoints;
+  $: scatterUnmeasurable = scatterMode === 'run' ? unmeasurableRuns : unmeasurableBucketRuns;
+  $: scatterFootnote = [
+    scatterMode === 'run'
+      ? 'one point per run'
+      : `one point per ${bucketWidth}, ${plottedBucketRuns} ${plottedBucketRuns === 1 ? 'run' : 'runs'}`,
+    scatterMode === 'run' && runsTruncated ? `most recent ${RUN_LIMIT} runs only` : '',
+    scatterUnmeasurable > 0
+      ? `${scatterUnmeasurable} ${scatterUnmeasurable === 1 ? 'run' : 'runs'} had no measurable rate`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' \u00b7 ');
+  $: scatterHeadline =
+    scatterMode === 'run'
+      ? `${runPoints.length} ${runPoints.length === 1 ? 'run' : 'runs'}`
+      : `${bucketPoints.length} ${bucketPoints.length === 1 ? 'bucket' : 'buckets'}`;
+
   /** The slowest bucket in the window: the dip a trend view exists to surface. */
   $: slowestP50 = $taskSeries.length
     ? Math.min(...$taskSeries.map((bucket) => bucket.gen_tps_p50))
     : null;
+
+  function toRunPoint(run: TaskRecord): ScatterPoint {
+    return {
+      time: Date.parse(run.timestamp),
+      value: run.gen_tps,
+      magnitude: run.output_tokens,
+      label: formatTooltipTimestamp(run.timestamp),
+      rows: [
+        { label: 'Tokens', value: `${run.input_tokens} in / ${run.output_tokens} out` },
+        { label: 'TTFT', value: `${run.ttft_seconds.toFixed(2)}s` },
+        { label: 'Duration', value: `${run.total_seconds.toFixed(1)}s` },
+        { label: 'Finish', value: run.finish_reason },
+      ],
+    };
+  }
+
+  function toBucketPoint(bucket: TaskSeriesBucket): ScatterPoint {
+    return {
+      time: Date.parse(bucket.t),
+      value: bucket.gen_tps_mean,
+      magnitude: bucket.output_tokens,
+      label: formatTooltipTimestamp(bucket.t),
+      rows: [
+        { label: 'Runs', value: `${bucket.count}` },
+        { label: 'p50', value: `${bucket.gen_tps_p50.toFixed(1)} t/s` },
+        { label: 'Tokens', value: `${bucket.total_tokens.toLocaleString('en-GB')} total` },
+      ],
+    };
+  }
 
   function rangeLabel(range: HistoryRange): string {
     return { '1h': '1h', '24h': '24h', '7d': '7d', '30d': '30d' }[range];
@@ -313,8 +392,20 @@
     {:else}
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div class="xl:col-span-2">
-          <ChartPanel title="Generation Speed (mean)" value={$taskSeries.length ? `${rangeLabel($historyRange)} - ${$taskSeries.length} buckets` : 'No runs'}>
-            <SvgLineChart title="Mean generation speed per bucket" values={seriesTpsMean} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit=" t/s" color="#d8ff00" heightClass="h-52" />
+          <ChartPanel title="Generation Speed" value={scatterPoints.length ? `${rangeLabel($historyRange)} - ${scatterHeadline}` : 'No runs'}>
+            <SvgScatterChart
+              title={scatterMode === 'run' ? 'Generation speed per run' : 'Mean generation speed per bucket'}
+              points={scatterPoints}
+              {tickFormat}
+              start={scatterWindow.start}
+              end={scatterWindow.end}
+              unit=" t/s"
+              color="#d8ff00"
+              heightClass="h-64"
+              sizeLabel={scatterMode === 'run' ? 'output tokens' : `output tokens per ${bucketWidth}`}
+              valueLabel={scatterMode === 'run' ? '' : 'mean'}
+              footnote={scatterFootnote}
+            />
           </ChartPanel>
         </div>
 
