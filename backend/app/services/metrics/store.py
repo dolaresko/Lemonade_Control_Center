@@ -36,6 +36,28 @@ RANGE_WINDOWS: dict[str, tuple[timedelta, int]] = {
 
 DEFAULT_RANGE = "24h"
 
+# Generation rates above this are not measurements: Lemonade emits a sentinel
+# (1000000.0) when a completion is one token long and there is no elapsed
+# generation time to divide by.
+MAX_PLAUSIBLE_TPS = 10_000.0
+
+
+def _measurable_rate(rate: float, output_tokens: int) -> float:
+    """Return the rate, or 0.0 when it cannot have been measured."""
+    try:
+        value = float(rate)
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value or value <= 0.0:  # NaN or nonsense
+        return 0.0
+    if output_tokens < 2:
+        # One token out means no generation interval to measure across.
+        return 0.0
+    if value > MAX_PLAUSIBLE_TPS:
+        return 0.0
+    return value
+
+
 _TASK_COLUMNS = (
     "timestamp",
     "model",
@@ -148,7 +170,7 @@ class MetricsStore:
                 row.input_tokens,
                 row.output_tokens,
                 row.prompt_tps,
-                row.gen_tps,
+                _measurable_rate(row.gen_tps, row.output_tokens),
                 row.ttft_seconds,
                 row.total_seconds,
                 row.finish_reason,
@@ -432,7 +454,8 @@ def bucket_task_rows(rows: list[dict], bucket_seconds: int) -> list[dict]:
     buckets: list[dict] = []
     for start in sorted(grouped):
         members = grouped[start]
-        gen_tps = [float(item["gen_tps"]) for item in members]
+        gen_tps = [r for item in members
+               if (r := float(item["gen_tps"])) > 0.0]
         ttft = [float(item["ttft_seconds"]) for item in members]
         input_tokens = sum(int(item["input_tokens"]) for item in members)
         output_tokens = sum(int(item["output_tokens"]) for item in members)
@@ -454,7 +477,8 @@ def bucket_task_rows(rows: list[dict], bucket_seconds: int) -> list[dict]:
 
 def summarize_task_rows(rows: list[dict]) -> dict:
     """Aggregate an entire window into one summary row."""
-    gen_tps = [float(row["gen_tps"]) for row in rows]
+    gen_tps = [r for row in rows
+               if (r := float(row["gen_tps"])) > 0.0]
     ttft = [float(row["ttft_seconds"]) for row in rows]
     input_tokens = sum(int(row["input_tokens"]) for row in rows)
     output_tokens = sum(int(row["output_tokens"]) for row in rows)
