@@ -1,11 +1,14 @@
 <script lang="ts">
   import {
+    bucketGapMs,
     formatTick,
     formatTooltipTimestamp,
     formatValue,
     inferBucketMs,
     nearestTimeIndex,
     niceScale,
+    ordinalSessionTicks,
+    SESSION_LABEL_MIN_GAP_PX,
     timeSegments,
     timeTicks,
     xTicks,
@@ -53,6 +56,17 @@
    * inferred from the timestamps when absent.
    */
   export let bucketSeconds: number | null = null;
+  /**
+   * Plot against bucket index instead of bucket timestamp.
+   *
+   * A bursty, sparse workload leaves most of a time-linear axis empty and
+   * shreds the line into orphan fragments a few pixels wide. On an ordinal
+   * axis every bucket gets equal width and the line is continuous: position
+   * carries sequence, and time survives in the session tick labels, which mark
+   * exactly where it jumped. Off by default -- the time-linear axis is the
+   * right one wherever the data is dense.
+   */
+  export let ordinal = false;
 
   let plotBox: HTMLDivElement;
   let activeIndex: number | null = null;
@@ -71,8 +85,10 @@
   // ── Time scale ──
   $: times = timestamps.map((value) => Date.parse(value));
   // Callers that pass no timestamps keep the original index positioning.
-  $: useTimeAxis =
+  $: hasTimes =
     hasData && times.length === values.length && times.every((time) => Number.isFinite(time));
+  $: useTimeAxis = hasTimes && !ordinal;
+  $: useOrdinal = hasTimes && ordinal;
 
   $: domainStart = useTimeAxis ? (parseBoundary(start) ?? times[0]) : 0;
   $: domainEnd = useTimeAxis ? (parseBoundary(end) ?? times[times.length - 1]) : 1;
@@ -81,7 +97,9 @@
   $: domainSpan = domainEnd > domainStart ? domainEnd - domainStart : 0;
 
   $: bucketMs = bucketSeconds && bucketSeconds > 0 ? bucketSeconds * 1000 : inferBucketMs(times);
-  // Index mode has no notion of a gap, so it stays one unbroken run.
+  // Only a time axis can show a gap as a gap. On an ordinal axis adjacent
+  // indices are adjacent by construction, so breaking the line there would
+  // recreate the fragments the axis exists to remove.
   $: segments = useTimeAxis
     ? timeSegments(times, bucketMs)
     : hasData
@@ -111,7 +129,14 @@
   $: tickTarget = xTickTarget(plotWidth);
   $: axisTimeTicks =
     showAxes && useTimeAxis ? timeTicks(domainStart, domainEnd, tickTarget, tickFormat) : [];
-  $: axisIndexTicks = showAxes && !useTimeAxis ? xTicks(values.length, tickTarget) : [];
+  // One tick per session -- the first bucket after each empty stretch -- so the
+  // ordinal axis still says when, and says it at the moments that matter.
+  $: axisOrdinalTicks =
+    showAxes && useOrdinal
+      ? ordinalSessionTicks(times, bucketGapMs(bucketMs), pointX, SESSION_LABEL_MIN_GAP_PX, tickFormat)
+      : [];
+  $: axisIndexTicks =
+    showAxes && !useTimeAxis && !useOrdinal ? xTicks(values.length, tickTarget) : [];
 
   $: lastIndex = values.length - 1;
   $: latest = values.at(-1);
@@ -148,21 +173,25 @@
     return padLeft + Math.min(Math.max(ratio, 0), 1) * plotWidth;
   }
 
-  function pointX(index: number): number {
-    if (useTimeAxis) return timeX(times[index]);
-    return values.length <= 1
-      ? padLeft + plotWidth / 2
-      : padLeft + (index / (values.length - 1)) * plotWidth;
-  }
+  // ── Position mappers ──
+  // Reactive values, not plain functions: Svelte tracks a `$:` statement by the
+  // identifiers it names, and a plain function declaration is never one of
+  // them. Declared with `function`, every statement and attribute that called
+  // these kept the geometry from the last time its *data* changed and ignored
+  // every remeasure of the box -- which is how the plotted marks and the line
+  // through them ended up on two different scales.
+  $: pointX = (index: number): number =>
+    useTimeAxis
+      ? timeX(times[index])
+      : values.length <= 1
+        ? padLeft + plotWidth / 2
+        : padLeft + (index / (values.length - 1)) * plotWidth;
 
-  function pointY(value: number): number {
-    const clamped = Math.min(Math.max(0, value), axisMax);
-    return padTop + plotHeight - (clamped / axisMax) * plotHeight;
-  }
+  $: pointY = (value: number): number =>
+    padTop + plotHeight - (Math.min(Math.max(0, value), axisMax) / axisMax) * plotHeight;
 
-  function segmentPoints(segment: number[]): string {
-    return segment.map((index) => `${pointX(index)},${pointY(values[index])}`).join(' ');
-  }
+  $: segmentPoints = (segment: number[]): string =>
+    segment.map((index) => `${pointX(index)},${pointY(values[index])}`).join(' ');
 
   function nearestIndex(clientX: number): number {
     if (values.length <= 1) return 0;
@@ -289,6 +318,27 @@
           </text>
         {/each}
 
+        {#each axisOrdinalTicks as tick}
+          <line
+            x1={tick.x}
+            y1={padTop + plotHeight}
+            x2={tick.x}
+            y2={padTop + plotHeight + 4}
+            stroke="#3f432d"
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
+          <text
+            x={tick.x}
+            y={padTop + plotHeight + 17}
+            text-anchor="middle"
+            font-size="10"
+            fill="#8b9178"
+          >
+            {tick.label}
+          </text>
+        {/each}
+
         {#each axisIndexTicks as tick}
           <line
             x1={pointX(tick.position)}
@@ -334,6 +384,14 @@
           <circle cx={pointX(segment[0])} cy={pointY(values[segment[0]])} r="3" fill={color} />
         {/if}
       {/each}
+
+      {#if useOrdinal}
+        <!-- The line is unbroken here, so without a mark per bucket a reader
+             cannot tell how many buckets it spans. -->
+        {#each values as value, index}
+          <circle cx={pointX(index)} cy={pointY(value)} r="3" fill={color} />
+        {/each}
+      {/if}
 
       {#if interactiveNow && activeIndex !== null && activeValue !== undefined}
         <line

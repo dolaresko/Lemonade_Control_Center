@@ -127,8 +127,6 @@
   $: seriesTimestamps = $taskSeries.map((bucket) => bucket.t);
   $: seriesCounts = $taskSeries.map((bucket) => bucket.count);
   $: tickFormat = rangeTickFormat($historyRange);
-  $: seriesTpsP50 = $taskSeries.map((bucket) => bucket.gen_tps_p50);
-  $: seriesTpsP95 = $taskSeries.map((bucket) => bucket.gen_tps_p95);
   $: seriesTtft = $taskSeries.map((bucket) => bucket.ttft_mean);
   $: seriesTokens = $taskSeries.map((bucket) => bucket.total_tokens);
   $: seriesRuns = $taskSeries.reduce((total, bucket) => total + bucket.count, 0);
@@ -170,6 +168,18 @@
     .filter(Boolean)
     .join(' \u00b7 ');
   $: scatterHeadline = `${runPoints.length} ${runPoints.length === 1 ? 'run' : 'runs'}`;
+
+  // The window's own p50 and p95, drawn across the marks. Both come from the
+  // API summary, computed over the raw runs of the whole window -- a
+  // percentile taken over the per-bucket percentiles would be a different, and
+  // wronger, number. A zero means no run in the window had a measurable rate,
+  // so there is no percentile to draw.
+  $: scatterReferences = $taskSeriesSummary?.count
+    ? [
+        { value: $taskSeriesSummary.gen_tps_p50, label: 'p50' },
+        { value: $taskSeriesSummary.gen_tps_p95, label: 'p95' },
+      ].filter((line) => line.value > 0)
+    : [];
 
   /** Newest first: the table is the one place every run's numbers are readable at once. */
   $: tableRuns = [...$taskRuns].sort((left, right) => Date.parse(right.timestamp) - Date.parse(left.timestamp));
@@ -237,13 +247,13 @@
 
 <div class="space-y-5">
   <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-    <div>
+    <div class="min-w-0">
       <h1 class="text-3xl font-bold">Hardware Monitor</h1>
       <p class="mt-2 max-w-3xl text-sm text-muted-foreground">
         Real-time time-series metrics for RAM, CPU, GPU load, thermals, and task performance.
       </p>
     </div>
-    <div class="flex flex-wrap gap-2">
+    <div class="flex shrink-0 items-start gap-2">
       <div class="flex gap-1 rounded border border-[#444936] bg-[#2b2d2a] p-1">
         <button
           class="rounded px-3 py-2 text-xs {view === 'live' ? 'bg-[#4a4d49] text-lemon' : 'text-[#e3e5d3] hover:bg-[#363935]'}"
@@ -308,13 +318,6 @@
         <button class="ops-button" type="button" on:click={clearLiveBuffer} title="Empty the live graph buffer. Stored history is not affected.">
           <Eraser class="h-4 w-4" />
           Clear
-        </button>
-      {:else}
-        <!-- Held apart from Refresh and Export: this one is irreversible. -->
-        <div class="mx-1 w-px self-stretch bg-[#444936]" aria-hidden="true"></div>
-        <button class="ops-button ops-button-danger" type="button" on:click={promptDeleteHistory}>
-          <Trash2 class="h-4 w-4" />
-          Delete history
         </button>
       {/if}
     </div>
@@ -443,6 +446,7 @@
               keySteps={$magnitudeKeySteps}
               sizeLabel="output tokens"
               footnote={scatterFootnote}
+              referenceLines={scatterReferences}
             />
           </ChartPanel>
 
@@ -487,20 +491,12 @@
           </details>
         </div>
 
-        <ChartPanel title="Generation p50" value={slowestP50 !== null ? `low ${slowestP50.toFixed(1)} t/s` : 'No runs'}>
-          <SvgLineChart title="Median generation speed per bucket" values={seriesTpsP50} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit=" t/s" color="#40f078" />
-        </ChartPanel>
-
-        <ChartPanel title="Generation p95" value={$taskSeriesSummary?.count ? `window ${$taskSeriesSummary.gen_tps_p95.toFixed(1)} t/s` : 'No runs'}>
-          <SvgLineChart title="95th percentile generation speed per bucket" values={seriesTpsP95} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit=" t/s" color="#ffb84d" />
-        </ChartPanel>
-
         <ChartPanel title="TTFT (mean)" value={$taskSeriesSummary?.count ? `${$taskSeriesSummary.ttft_mean.toFixed(2)}s` : 'No runs'}>
-          <SvgLineChart title="Mean time to first token per bucket" values={seriesTtft} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} unit="s" color="#ffb0a8" />
+          <SvgLineChart title="Mean time to first token per bucket" values={seriesTtft} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} bucketSeconds={$taskWindow.bucketSeconds} ordinal axes interactive showFooter={false} unit="s" color="#ffb0a8" />
         </ChartPanel>
 
         <ChartPanel title="Tokens per Bucket" value={$taskSeriesSummary?.count ? `${$taskSeriesSummary.total_tokens} total` : 'No runs'}>
-          <SvgBarChart title="Total tokens per bucket" values={seriesTokens} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} start={$taskWindow.start} end={$taskWindow.end} bucketSeconds={$taskWindow.bucketSeconds} axes interactive showFooter={false} color="#efff7a" />
+          <SvgBarChart title="Total tokens per bucket" values={seriesTokens} timestamps={seriesTimestamps} counts={seriesCounts} {tickFormat} bucketSeconds={$taskWindow.bucketSeconds} ordinal axes interactive showFooter={false} color="#efff7a" />
         </ChartPanel>
 
         <ChartPanel title="RAM (mean / peak)" value={hardwareRam.length ? `${hardwareRam.at(-1)?.toFixed(1)}% / ${Math.max(...hardwareRamPeak).toFixed(1)}%` : 'No samples'}>
@@ -520,6 +516,20 @@
         {/if}
       </div>
     {/if}
+
+    <!-- Its own row at the foot of the view: irreversible, and nowhere near
+         Refresh or Export. Available even on an empty window, because the
+         delete clears every persisted row, not just this range. -->
+    <div class="flex flex-col gap-3 border-t border-[#34382d] pt-4 sm:flex-row sm:items-center sm:justify-between">
+      <p class="text-xs text-muted-foreground">
+        Deleting history drops every stored run and hardware sample, not only the
+        {rangeLabel($historyRange)} window. This cannot be undone.
+      </p>
+      <button class="ops-button ops-button-danger shrink-0 self-start sm:self-auto" type="button" on:click={promptDeleteHistory}>
+        <Trash2 class="h-4 w-4" />
+        Delete history
+      </button>
+    </div>
   </section>
   {/if}
 </div>

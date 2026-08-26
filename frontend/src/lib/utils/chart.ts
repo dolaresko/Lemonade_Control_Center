@@ -495,3 +495,115 @@ export function formatBucketWidth(seconds: number | null): string {
   const minutes = Math.round(seconds / 60);
   return minutes === 1 ? 'minute' : `${minutes} minutes`;
 }
+
+// ═══════════════════════════════════════════════
+// Ordinal x axis
+// ═══════════════════════════════════════════════
+
+/**
+ * One x tick on an ordinal axis: a position in the series, and the wall-clock
+ * moment that position stands for.
+ */
+export interface OrdinalTick {
+  /** Index into the series. */
+  index: number;
+  /** Pixel position, from the caller's own index-to-x mapping. */
+  x: number;
+  /** Preformatted label. */
+  label: string;
+}
+
+/**
+ * Tick marks for an ordinal x axis, one per session.
+ *
+ * On an ordinal axis a position carries sequence, not time, so ticks cannot sit
+ * on round wall-clock boundaries -- there is no continuous time domain to
+ * anchor them to. They sit instead where time actually jumped: at the first
+ * entry of each burst of activity. `gapMs` is what counts as a jump -- the idle
+ * threshold between runs for a scatter of runs, one bucket width for a series
+ * of buckets. Candidates are thinned so labels never collide.
+ */
+export function ordinalSessionTicks(
+  times: number[],
+  gapMs: number,
+  xOf: (index: number) => number,
+  minGapPx: number,
+  format: TickFormat,
+): OrdinalTick[] {
+  if (times.length === 0) return [];
+  return thinTicks(sessionStartIndices(times, gapMs), xOf, minGapPx).map((index) => ({
+    index,
+    x: xOf(index),
+    label: formatAxisLabel(new Date(times[index]).toISOString(), format),
+  }));
+}
+
+/**
+ * What counts as a jump in time between two buckets.
+ *
+ * Buckets are uniform in width, so any step beyond one bucket is an empty
+ * stretch the series omitted. The 1.5x tolerance absorbs boundary jitter,
+ * matching timeSegments. An unknown width leaves the series as a single
+ * session rather than declaring every bucket a session of its own.
+ */
+export function bucketGapMs(bucketMs: number): number {
+  return bucketMs > 0 ? bucketMs * 1.5 : Number.POSITIVE_INFINITY;
+}
+
+// ═══════════════════════════════════════════════
+// Reference lines
+// ═══════════════════════════════════════════════
+
+/**
+ * A horizontal rule drawn across a plot at a fixed value: a summary statistic
+ * the marks are read against, not a series of its own.
+ */
+export interface ReferenceLine {
+  value: number;
+  /** Short name -- "p50", "p95". The value is appended by the chart. */
+  label: string;
+}
+
+/** A reference line placed on the plot, with its label kept clear of the others. */
+export interface PlacedReferenceLine extends ReferenceLine {
+  /** The rule's true y. Never adjusted -- the rule is the data. */
+  y: number;
+  /** The label's y, nudged apart from its neighbours where they would collide. */
+  labelY: number;
+  /** Label text, value included. */
+  text: string;
+}
+
+/**
+ * Place reference-line labels so two close values stay separately readable.
+ *
+ * Only the labels move; each rule stays at the value it reports. Labels are
+ * walked top-down and pushed down to clear the previous one, then the whole
+ * group is shifted back up if that pushed the last one past the plot floor --
+ * so a pair of near-identical percentiles reads as two lines rather than one
+ * smudge, without either rule lying about where it sits.
+ */
+export function placeReferenceLines(
+  lines: ReferenceLine[],
+  yOf: (value: number) => number,
+  labelOf: (line: ReferenceLine) => string,
+  minGapPx: number,
+  top: number,
+  bottom: number,
+): PlacedReferenceLine[] {
+  const placed = lines
+    .map((line) => ({ ...line, y: yOf(line.value), labelY: yOf(line.value), text: labelOf(line) }))
+    .sort((left, right) => left.y - right.y);
+
+  let cursor = top;
+  for (const entry of placed) {
+    entry.labelY = Math.max(entry.y, cursor);
+    cursor = entry.labelY + minGapPx;
+  }
+
+  const overflow = cursor - minGapPx - bottom;
+  if (overflow > 0) {
+    for (const entry of placed) entry.labelY = Math.max(top, entry.labelY - overflow);
+  }
+  return placed;
+}

@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    formatAxisLabel,
     formatTick,
     formatValue,
     markRadius,
@@ -8,10 +7,11 @@
     MARK_RADIUS_MAX,
     nearestMarkIndex,
     niceScale,
+    ordinalSessionTicks,
+    placeReferenceLines,
     SESSION_GAP_MS,
     SESSION_LABEL_MIN_GAP_PX,
-    sessionStartIndices,
-    thinTicks,
+    type ReferenceLine,
     type ScatterPoint,
     type TickFormat,
   } from '$lib/utils/chart';
@@ -44,6 +44,12 @@
   export let valueLabel = '';
   /** Anything dropped from the plot. */
   export let footnote = '';
+  /**
+   * Window-wide statistics to read the marks against -- p50, p95. Drawn as
+   * chrome, not as a series: the marks are the data, these only say where the
+   * middle and the top of the distribution sit.
+   */
+  export let referenceLines: ReferenceLine[] = [];
 
   let plotBox: HTMLDivElement;
   let activeIndex: number | null = null;
@@ -59,8 +65,17 @@
   $: hasData = marks.length > 0;
   $: lastIndex = marks.length - 1;
 
+  // A reference line is labelled in the right gutter rather than over the
+  // plot, where the text would sit on top of the marks it describes.
+  $: validReferences = referenceLines.filter(
+    (line) => Number.isFinite(line.value) && line.value > 0,
+  );
+  $: referenceGutter = validReferences.length
+    ? Math.min(120, Math.max(...validReferences.map((line) => referenceText(line).length)) * 5.6 + 12)
+    : 0;
+
   $: padLeft = 46;
-  $: padRight = 18;
+  $: padRight = 18 + referenceGutter;
   $: padTop = unit.trim() ? 26 : 14;
   $: padBottom = 28;
 
@@ -69,7 +84,9 @@
   $: plotWidth = Math.max(width - padLeft - padRight, 1);
   $: plotHeight = Math.max(height - padTop - padBottom, 1);
 
-  $: dataMax = hasData ? Math.max(...marks.map((mark) => mark.value)) : 0;
+  $: dataMax = hasData
+    ? Math.max(...marks.map((mark) => mark.value), ...validReferences.map((line) => line.value))
+    : 0;
   $: scale = niceScale(yMax ?? dataMax, 4);
   $: axisMax = yMax && yMax > 0 ? yMax : Math.max(scale.max, 1);
   // An empty window gets no value axis: labelling 0 .. 1 t/s would put a
@@ -88,14 +105,15 @@
   // overlapping -- rather than drawing a separator line per session, which
   // on 30d would be dozens of vertical lines of pure non-data ink.
   $: markTimes = marks.map((mark) => mark.time);
-  $: sessionStarts = hasData ? sessionStartIndices(markTimes, SESSION_GAP_MS) : [];
-  $: sessionTickIndices = hasData
-    ? thinTicks(sessionStarts, indexX, SESSION_LABEL_MIN_GAP_PX)
+  $: sessionTicks = hasData
+    ? ordinalSessionTicks(markTimes, SESSION_GAP_MS, indexX, SESSION_LABEL_MIN_GAP_PX, tickFormat)
     : [];
-  $: sessionTicks = sessionTickIndices.map((index) => ({
-    x: indexX(index),
-    label: formatAxisLabel(new Date(markTimes[index]).toISOString(), tickFormat),
-  }));
+
+  // Placed only once there is data: on an empty window there is no plot to
+  // draw a rule across, and nothing for it to be a reference for.
+  $: placedReferences = hasData
+    ? placeReferenceLines(validReferences, pointY, referenceText, 12, padTop + 4, padTop + plotHeight)
+    : [];
 
   // The dip is the reason this chart exists; label it directly rather than
   // leaving it discoverable only on hover.
@@ -126,6 +144,10 @@
         .join(', ')}`
     : `${title}. ${marks.length} points. Use arrow keys to inspect them in time order.`;
 
+  function referenceText(line: ReferenceLine): string {
+    return `${line.label} ${formatValue(line.value, unit)}`;
+  }
+
   function clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
   }
@@ -139,16 +161,19 @@
     return best;
   }
 
+  // ── Position mappers ──
+  // Reactive values, not plain functions: Svelte tracks a `$:` statement by the
+  // identifiers it names, and a plain function declaration is never one of
+  // them. Declared with `function`, every statement and attribute that called
+  // these kept the geometry from the last time its *data* changed and ignored
+  // every remeasure of the box -- which is how the plotted marks and the line
+  // through them ended up on two different scales.
   /** Map a run's position in the window onto the plot, linear in index. */
-  function indexX(index: number): number {
-    if (lastIndex <= 0) return padLeft + plotWidth / 2;
-    return padLeft + (index / lastIndex) * plotWidth;
-  }
+  $: indexX = (index: number): number =>
+    lastIndex <= 0 ? padLeft + plotWidth / 2 : padLeft + (index / lastIndex) * plotWidth;
 
-  function pointY(value: number): number {
-    const clamped = Math.min(Math.max(0, value), axisMax);
-    return padTop + plotHeight - (clamped / axisMax) * plotHeight;
-  }
+  $: pointY = (value: number): number =>
+    padTop + plotHeight - (Math.min(Math.max(0, value), axisMax) / axisMax) * plotHeight;
 
   /** Pointer position in viewBox units. */
   function viewPosition(event: PointerEvent): { x: number; y: number } | null {
@@ -278,6 +303,31 @@
       {#if unit.trim() && hasData}
         <text x={padLeft - 8} y={padTop - 13} text-anchor="end" font-size="9" fill="#8b9178">{unit.trim()}</text>
       {/if}
+
+      <!-- Window statistics, drawn before the marks so they sit behind them:
+           these are the reference the marks are read against, never a series
+           of their own. Hairline and solid in a muted token -- a dash pattern
+           or the series colour would both read as data. -->
+      {#each placedReferences as reference}
+        <line
+          x1={padLeft}
+          y1={reference.y}
+          x2={padLeft + plotWidth}
+          y2={reference.y}
+          stroke="#596044"
+          stroke-width="1"
+          vector-effect="non-scaling-stroke"
+        />
+        <text
+          x={padLeft + plotWidth + 6}
+          y={reference.labelY + 3}
+          text-anchor="start"
+          font-size="10"
+          fill="#8b9178"
+        >
+          {reference.text}
+        </text>
+      {/each}
 
       <!-- One mark per event. The ring is drawn in the panel colour, so two
            runs seconds apart still read as two runs. -->

@@ -1,11 +1,14 @@
 <script lang="ts">
   import {
+    bucketGapMs,
     formatTick,
     formatTooltipTimestamp,
     formatValue,
     inferBucketMs,
     nearestTimeIndex,
     niceScale,
+    ordinalSessionTicks,
+    SESSION_LABEL_MIN_GAP_PX,
     timeTicks,
     xTicks,
     xTickTarget,
@@ -37,6 +40,14 @@
   export let end: string | null = null;
   /** Server bucket width; sets the bar width and is inferred when absent. */
   export let bucketSeconds: number | null = null;
+  /**
+   * Plot against bucket index instead of bucket timestamp. See SvgLineChart:
+   * on a sparse window the time axis leaves hairline bars stranded in mostly
+   * empty space. Bars survive the move -- a bucket is a category, and one bar
+   * per category is exactly what the ordinal axis lays out -- so each bucket
+   * gets equal width and the gaps are told by the session tick labels.
+   */
+  export let ordinal = false;
 
   let plotBox: HTMLDivElement;
   let activeIndex: number | null = null;
@@ -52,8 +63,10 @@
   // ── Time scale ──
   $: times = timestamps.map((value) => Date.parse(value));
   // Callers that pass no timestamps keep the original index positioning.
-  $: useTimeAxis =
+  $: hasTimes =
     hasData && times.length === values.length && times.every((time) => Number.isFinite(time));
+  $: useTimeAxis = hasTimes && !ordinal;
+  $: useOrdinal = hasTimes && ordinal;
   $: domainStart = useTimeAxis ? (parseBoundary(start) ?? times[0]) : 0;
   $: domainEnd = useTimeAxis ? (parseBoundary(end) ?? times[times.length - 1]) : 1;
   $: domainSpan = domainEnd > domainStart ? domainEnd - domainStart : 0;
@@ -78,7 +91,14 @@
   $: tickTarget = xTickTarget(plotWidth);
   $: axisTimeTicks =
     showAxes && useTimeAxis ? timeTicks(domainStart, domainEnd, tickTarget, tickFormat) : [];
-  $: axisIndexTicks = showAxes && !useTimeAxis ? xTicks(values.length, tickTarget) : [];
+  // One tick per session, sitting under the middle of the bucket that starts
+  // it, so the ordinal axis still says when.
+  $: axisOrdinalTicks =
+    showAxes && useOrdinal
+      ? ordinalSessionTicks(times, bucketGapMs(bucketMs), barCentre, SESSION_LABEL_MIN_GAP_PX, tickFormat)
+      : [];
+  $: axisIndexTicks =
+    showAxes && !useTimeAxis && !useOrdinal ? xTicks(values.length, tickTarget) : [];
 
   $: lastIndex = values.length - 1;
   // In time mode a bar is as wide as the bucket it stands for, so a sparse
@@ -118,22 +138,24 @@
     return padLeft + Math.min(Math.max(ratio, 0), 1) * plotWidth;
   }
 
+  // ── Position mappers ──
+  // Reactive values, not plain functions: Svelte tracks a `$:` statement by the
+  // identifiers it names, and a plain function declaration is never one of
+  // them. Declared with `function`, every statement and attribute that called
+  // these kept the geometry from the last time its *data* changed and ignored
+  // every remeasure of the box -- which is how the plotted marks and the line
+  // through them ended up on two different scales.
   /** Left edge of a bar. Buckets are labelled by their start. */
-  function barLeft(index: number): number {
-    return useTimeAxis ? timeX(times[index]) : padLeft + index * barWidth;
-  }
+  $: barLeft = (index: number): number =>
+    useTimeAxis ? timeX(times[index]) : padLeft + index * barWidth;
 
-  function barCentre(index: number): number {
-    return barLeft(index) + barWidth / 2;
-  }
+  $: barCentre = (index: number): number => barLeft(index) + barWidth / 2;
 
-  function barHeight(value: number): number {
-    return (Math.min(Math.max(0, value), axisMax) / axisMax) * plotHeight;
-  }
+  $: barHeight = (value: number): number =>
+    (Math.min(Math.max(0, value), axisMax) / axisMax) * plotHeight;
 
-  function tickY(tick: number): number {
-    return padTop + plotHeight - (tick / axisMax) * plotHeight;
-  }
+  $: tickY = (tick: number): number =>
+    padTop + plotHeight - (tick / axisMax) * plotHeight;
 
   function nearestIndex(clientX: number): number {
     if (values.length <= 1) return 0;
@@ -243,6 +265,27 @@
             vector-effect="non-scaling-stroke"
           />
           <text x={timeX(tick.time)} y={padTop + plotHeight + 17} text-anchor="middle" font-size="10" fill="#8b9178">
+            {tick.label}
+          </text>
+        {/each}
+
+        {#each axisOrdinalTicks as tick}
+          <line
+            x1={tick.x}
+            y1={padTop + plotHeight}
+            x2={tick.x}
+            y2={padTop + plotHeight + 4}
+            stroke="#3f432d"
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
+          <text
+            x={tick.x}
+            y={padTop + plotHeight + 17}
+            text-anchor="middle"
+            font-size="10"
+            fill="#8b9178"
+          >
             {tick.label}
           </text>
         {/each}
