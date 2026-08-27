@@ -1,0 +1,62 @@
+2026-08-22 10:00:46.133 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:00:48.884 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=65 (in=27, out=38), ttft=0.46s, tps=16.61
+2026-08-22 10:00:48.886 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:00:53.850 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=100 (in=21, out=79), ttft=0.31s, tps=16.99
+2026-08-22 10:00:53.852 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:01:25.350 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=588 (in=26, out=562), ttft=0.32s, tps=18.03
+2026-08-22 10:03:43.769 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:03:53.973 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=2316 (in=2306, out=10), ttft=9.79s, tps=25.02
+2026-08-22 10:04:46.685 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:07:10.442 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=24341 (in=24124, out=217), ttft=135.26s, tps=25.69
+2026-08-22 10:08:28.543 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:08:43.276 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=2398 (in=2337, out=61), ttft=10.17s, tps=13.43
+2026-08-22 10:09:15.955 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:09:18.626 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=115 (in=91, out=24), ttft=1.00s, tps=14.55
+2026-08-22 10:09:44.102 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:09:47.398 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=104 (in=49, out=55), ttft=0.87s, tps=22.94
+2026-08-22 10:09:47.520 [Info] (Server) POST /api/v1/images/generations
+2026-08-22 10:09:47.520 [Info] (Server) Auto-loading model: SD-Turbo
+2026-08-22 10:09:47.521 [Info] (Router) Auto-tune ctx_size resolved to 4096
+2026-08-22 10:09:47.524 [Info] (SDServer) Loading model: SD-Turbo
+2026-08-22 10:09:47.525 [Info] (sd-cpp Server) Installing sd-server (version: master-820-de298c2)
+  Progress: 33% (14.6/43.9 MB)
+  Progress: 100% (43.9/43.9 MB)
+2026-08-22 10:09:50.117 [Info] (SDServer) Starting server on port 8003 (backend: vulkan)
+2026-08-22 10:09:50.117 [Info] (SDServer) Applying Vulkan SD workaround: --vae-tiling --diffusion-fa
+2026-08-22 10:09:50.119 [Info] (SDServer) Process started with PID: 638806
+Waiting for sd-server to be ready (timeout: 600s)...
+2026-08-22 10:09:51.513 [Info] (on_vram_pressure) VRAM pressure critical (90.53% >= 90.00%). Evaluating eviction.
+2026-08-22 10:09:53.519 [Info] (on_vram_pressure) VRAM pressure critical (90.53% >= 90.00%). Evaluating eviction.
+2026-08-22 10:09:55.528 [Info] (on_vram_pressure) VRAM pressure critical (90.53% >= 90.00%). Evaluating eviction.
+2026-08-22 10:09:57.534 [Info] (on_vram_pressure) VRAM pressure critical (90.53% >= 90.00%). Evaluating eviction.
+2026-08-22 10:09:59.543 [Info] (on_vram_pressure) VRAM pressure critical (90.53% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:01.552 [Info] (on_vram_pressure) VRAM pressure critical (90.53% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:02.811 [Info] (WrappedServer) sd-server is ready!
+2026-08-22 10:10:02.812 [Info] (BackendWatchdog) Started watchdog for sd-server using http://127.0.0.1:8003/ (streaming=on, non_streaming=on)
+2026-08-22 10:10:02.812 [Info] (SDServer) Server is ready at http://127.0.0.1:8003
+2026-08-22 10:10:02.812 [Info] (Router) Model loaded successfully. Total loaded: 3
+2026-08-22 10:10:02.812 [Info] (Server) Model loaded successfully: SD-Turbo
+2026-08-22 10:10:03.558 [Info] (on_vram_pressure) VRAM pressure critical (98.87% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:05.562 [Info] (on_vram_pressure) VRAM pressure critical (98.87% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:07.567 [Info] (on_vram_pressure) VRAM pressure critical (100.00% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:09.572 [Info] (on_vram_pressure) VRAM pressure critical (99.05% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:11.573 [Info] (on_vram_pressure) VRAM pressure critical (99.05% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:13.577 [Info] (on_vram_pressure) VRAM pressure critical (99.05% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:15.580 [Info] (on_vram_pressure) VRAM pressure critical (99.05% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:17.582 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:19.585 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:21.589 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:23.590 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:25.593 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:27.596 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:29.598 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:31.601 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:33.604 [Info] (on_vram_pressure) VRAM pressure critical (98.57% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:35.616 [Info] (on_vram_pressure) VRAM pressure critical (95.90% >= 90.00%). Evaluating eviction.
+2026-08-22 10:10:35.616 [Info] (evaluate_servers) Eviction Engine unloading model: SD-Turbo due to score/pressure/idle.
+2026-08-22 10:10:35.616 [Info] (Router) Evicting model: SD-Turbo
+2026-08-22 10:10:35.616 [Info] (SDServer) Stopping server (PID: 638806)
+2026-08-22 10:10:35.717 [Info] (ProcessManager) Process terminated, waiting for GPU driver cleanup...
+2026-08-22 10:10:37.718 [Info] (Router) Evicted model: SD-Turbo
+2026-08-22 10:11:10.139 [Info] (Server) POST /api/v1/chat/completions - 200 OK
+2026-08-22 10:11:15.874 [Info] (Telemetry) Inference completed: model=Gemma-4-12B-it-MTP-GGUF, tokens=152 (in=91, out=61), ttft=1.24s, tps=13.84
