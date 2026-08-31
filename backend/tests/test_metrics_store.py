@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -7,8 +7,8 @@ import pytest
 from app.services.log_parser import extract_task_records
 from app.services.metrics.store import (
     MetricsStore,
-    _measurable_rate,
     TaskRow,
+    _measurable_rate,
     bucket_hardware_rows,
     bucket_start,
     bucket_task_rows,
@@ -18,7 +18,7 @@ from app.services.metrics.store import (
 from app.services.metrics.task_history import MIGRATION_META_KEY, TaskHistory
 
 FIXTURE = Path(__file__).parent / "fixtures" / "lemond_journal_11_7.log"
-BASE = datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc)
+BASE = datetime(2026, 8, 22, 10, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -73,7 +73,7 @@ def test_store_creates_its_database_in_wal_mode(store):
 
 
 def test_empty_store_returns_empty_series_not_errors(store):
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     start = end - timedelta(days=30)
 
     assert store.get_tasks() == []
@@ -315,7 +315,7 @@ def test_hardware_minute_rows_are_upserted_in_place(store):
 
 
 def test_prune_drops_rows_past_their_retention_window(store):
-    now = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 22, 12, 0, tzinfo=UTC)
     fresh = now - timedelta(days=1)
     stale_task = now - timedelta(days=91)
     stale_hardware = now - timedelta(days=31)
@@ -509,9 +509,11 @@ def test_stored_finish_confidence_matches_the_rest_of_the_api(store):
     """Plain "inferred", not the enum's repr, so CSV exports stay readable."""
     history = TaskHistory(store)
     history.ingest(extract_task_records([
-        "2026-08-22 10:11:15.874 [Info] (Telemetry) Inference completed: "
-        "model=Gemma-4-12B-it-MTP-GGUF, tokens=152 (in=91, out=61), "
-        "ttft=1.24s, tps=13.84",
+        (
+            "2026-08-22 10:11:15.874 [Info] (Telemetry) Inference completed: "
+            "model=Gemma-4-12B-it-MTP-GGUF, tokens=152 (in=91, out=61), "
+            "ttft=1.24s, tps=13.84"
+        ),
     ]))
 
     row = store.get_tasks()[0]

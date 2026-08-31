@@ -12,25 +12,25 @@ from urllib.parse import quote
 import httpx
 from fastapi import HTTPException
 
-from app.config import settings
 from app.capabilities import capabilities
-from app.providers.base import LLMProvider
+from app.config import settings
+from app.models.intake import IntakePullRequest
 from app.models.schemas import (
+    ConfigUpdateRequest,
+    LemonadeConfigResponse,
     LemonadeHealthResponse,
     LemonadeStatsResponse,
-    ModelsListResponse,
-    ModelInfo,
-    RunningModelsResponse,
-    RunningModelInfo,
-    ModelShowResponse,
     LoadModelRequest,
     LoadModelResponse,
+    ModelInfo,
+    ModelShowResponse,
+    ModelsListResponse,
     PullModelRequest,
     PullModelResponse,
-    LemonadeConfigResponse,
-    ConfigUpdateRequest,
+    RunningModelInfo,
+    RunningModelsResponse,
 )
-from app.models.intake import IntakePullRequest
+from app.providers.base import LLMProvider
 
 
 class LemonadeProvider(LLMProvider):
@@ -67,6 +67,15 @@ class LemonadeProvider(LLMProvider):
                        f"Re-run 'python capabilities/probe.py' after verifying Lemonade config."
             )
 
+    def _headers(self, headers: dict | None = None) -> dict | None:
+        """Merge custom headers with default Authorization header if configured."""
+        if not self.admin_headers:
+            return headers
+        merged = dict(self.admin_headers)
+        if headers:
+            merged.update(headers)
+        return merged
+
     async def _get(self, path: str, *, headers: dict | None = None,
                    timeout: float | None = None) -> httpx.Response:
         """GET request to Lemonade with error handling."""
@@ -74,7 +83,7 @@ class LemonadeProvider(LLMProvider):
             async with httpx.AsyncClient(timeout=timeout or self.timeout, trust_env=False) as client:
                 return await client.get(
                     f"{self.base_url}{path}",
-                    headers=headers
+                    headers=self._headers(headers),
                 )
         except httpx.ConnectError:
             raise HTTPException(503, f"Lemonade not reachable at {self.base_url}")
@@ -90,7 +99,7 @@ class LemonadeProvider(LLMProvider):
                 return await client.post(
                     f"{self.base_url}{path}",
                     json=body or {},
-                    headers=headers
+                    headers=self._headers(headers),
                 )
         except httpx.ConnectError:
             raise HTTPException(503, f"Lemonade not reachable at {self.base_url}")

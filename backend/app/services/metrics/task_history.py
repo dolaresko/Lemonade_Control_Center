@@ -10,7 +10,7 @@ import csv
 import io
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.capabilities import capabilities
@@ -148,7 +148,7 @@ class TaskHistory:
                 imported = self._store.insert_tasks([row for row in rows if row])
             except (OSError, TypeError, ValueError):
                 imported = 0
-        self._store.set_meta(MIGRATION_META_KEY, datetime.now(timezone.utc).isoformat())
+        self._store.set_meta(MIGRATION_META_KEY, datetime.now(UTC).isoformat())
         return imported
 
 

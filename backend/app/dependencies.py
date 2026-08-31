@@ -8,8 +8,9 @@ Usage in routers:
 """
 from fastapi import Depends
 
-from app.providers.lemonade import LemonadeProvider
+from app.config import settings
 from app.models.setup import RuntimeConfig
+from app.providers.lemonade import LemonadeProvider
 from app.services.completion_runner import CompletionRunner
 from app.services.setup import SetupService
 
@@ -46,4 +47,6 @@ def get_completion_runner(
     provider: LemonadeProvider = Depends(get_provider),
 ) -> CompletionRunner:
     """Build the core completion runner for the active Lemonade runtime."""
-    return CompletionRunner(provider.base_url)
+    active = get_active_runtime_config()
+    api_key = active.admin_key if active and active.admin_key else settings.lemonade_admin_api_key
+    return CompletionRunner(provider.base_url, api_key=api_key)

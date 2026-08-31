@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -7,7 +7,7 @@ from app.services.metrics.buffer import DataPoint
 from app.services.metrics.store import MetricsStore
 from app.services.metrics.task_history import task_history
 
-MINUTE = datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc)
+MINUTE = datetime(2026, 8, 22, 10, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -111,7 +111,7 @@ async def test_the_task_sampler_swallows_journal_failures(store, monkeypatch):
 async def test_prune_once_applies_the_configured_retention(store, monkeypatch):
     monkeypatch.setattr("app.services.metrics.collector.settings.task_retention_days", 90)
     monkeypatch.setattr("app.services.metrics.collector.settings.hardware_retention_days", 30)
-    stale = datetime.now(timezone.utc) - timedelta(days=120)
+    stale = datetime.now(UTC) - timedelta(days=120)
     store.upsert_hardware_minute({
         "timestamp": stale.isoformat(), "sample_count": 1, "ram_used_gb": 1.0,
         "ram_total_gb": 8.0, "ram_percent": 12.0, "ram_percent_min": 12.0,

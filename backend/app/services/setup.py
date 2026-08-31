@@ -1,12 +1,12 @@
 """First-run setup and persistent application settings."""
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 import socket
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -23,10 +23,10 @@ from app.models.setup import (
     ConnectionTestResult,
     DiscoveryCheck,
     DiscoveryResult,
-    LemonadeDiscoveryCandidate,
-    LemonadeDiscoveryResponse,
     LccConfig,
     LccConfigPublic,
+    LemonadeDiscoveryCandidate,
+    LemonadeDiscoveryResponse,
     RuntimeConfig,
     RuntimeConfigPublic,
     SetupConnectionRequest,
@@ -200,9 +200,10 @@ class SetupService:
 
         start = time.monotonic()
         health_data: dict = {}
+        headers = self._admin_headers(runtime.admin_key)
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
-                health = await client.get(f"{normalized_url}/api/v1/health")
+                health = await client.get(f"{normalized_url}/api/v1/health", headers=headers)
                 health.raise_for_status()
                 health_data = health.json()
             response.reachable = True
@@ -287,7 +288,7 @@ class SetupService:
         runtime.is_active = True
         config = LccConfig(
             setup_complete=True,
-            setup_date=datetime.now(timezone.utc),
+            setup_date=datetime.now(UTC),
             runtimes=[runtime],
             active_runtime_id=runtime.id,
             system=request.system,
@@ -366,7 +367,7 @@ class SetupService:
             result = await self.test_connection(
                 SetupConnectionRequest(type=runtime.type, url=runtime.url, admin_key=runtime.admin_key)
             )
-            runtime.last_tested = datetime.now(timezone.utc)
+            runtime.last_tested = datetime.now(UTC)
             runtime.test_status = "ok" if result.success else "error"
             self.save_config(config)
             return result
@@ -705,8 +706,7 @@ def _normalize_lemonade_url(value: str) -> str:
     if not url.startswith(("http://", "https://")):
         url = f"http://{url}"
     for suffix in ("/api/v1", "/v1"):
-        if url.endswith(suffix):
-            url = url[: -len(suffix)]
+        url = url.removesuffix(suffix)
     return url.rstrip("/")
 
 

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
@@ -63,7 +63,7 @@ async def get_tasks_series(
 ):
     """Time-bucketed generation-speed aggregates over a long window."""
     key, window, bucket_seconds = resolve_range(range)
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     start = end - window
     window = await asyncio.to_thread(task_history.window, start, end, bucket_seconds)
     return {
@@ -88,7 +88,7 @@ async def get_tasks_scale(
     single number; the store reads one column and reduces it here instead.
     """
     key, window, _bucket_seconds = resolve_range(range)
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     start = end - window
     result = await asyncio.to_thread(
         task_history.store.output_token_percentile, start, end, quantile
@@ -109,7 +109,7 @@ async def get_hardware_series(
 ):
     """Time-bucketed hardware aggregates from the persisted per-minute rows."""
     key, window, bucket_seconds = resolve_range(range)
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     start = end - window
     buckets = await asyncio.to_thread(
         task_history.store.hardware_series, start, end, bucket_seconds
@@ -134,7 +134,7 @@ async def export_tasks_csv(
     window_end = _parse_boundary(until, "until")
     if range and window_start is None:
         _, window, _bucket = resolve_range(range)
-        window_start = datetime.now(timezone.utc) - window
+        window_start = datetime.now(UTC) - window
 
     body = await asyncio.to_thread(
         task_history.export_csv, window_start, window_end, 100_000, True
@@ -198,17 +198,16 @@ def _parse_boundary(value: str | None, field: str) -> datetime | None:
     except ValueError:
         raise HTTPException(status_code=400, detail=f"{field} must be an ISO-8601 timestamp")
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 @ws_router.websocket("/ws/metrics")
 async def ws_metrics(websocket: WebSocket):
     host = websocket.client.host if websocket.client else None
-    if auth_required_for_host(host):
-        if not key_configured() or not verify_key(key_from_websocket(websocket)):
-            await websocket.close(code=1008)
-            return
+    if auth_required_for_host(host) and (not key_configured() or not verify_key(key_from_websocket(websocket))):
+        await websocket.close(code=1008)
+        return
 
     await websocket.accept()
     queue = subscribe()

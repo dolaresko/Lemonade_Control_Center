@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -31,7 +31,7 @@ def empty_store(tmp_path, monkeypatch):
 
 
 def recent_row(minutes_ago: float, gen_tps: float, ttft: float = 1.0) -> TaskRow:
-    moment = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    moment = datetime.now(UTC) - timedelta(minutes=minutes_ago)
     return TaskRow(
         timestamp=moment.isoformat(),
         model="Gemma-4-12B-it-MTP-GGUF",
@@ -52,7 +52,7 @@ def sized_row(index: int, output_tokens: int, minutes_ago: float = 5) -> TaskRow
     The store dedupes on (timestamp, model, in, out), so the index walks the
     timestamp apart -- otherwise two runs of the same size collapse into one.
     """
-    moment = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago, seconds=index)
+    moment = datetime.now(UTC) - timedelta(minutes=minutes_ago, seconds=index)
     return TaskRow(
         timestamp=moment.isoformat(),
         model="Gemma-4-12B-it-MTP-GGUF",
@@ -69,7 +69,7 @@ def sized_row(index: int, output_tokens: int, minutes_ago: float = 5) -> TaskRow
 
 def hardware_minute(minutes_ago: float) -> dict:
     minute = (
-        datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        datetime.now(UTC) - timedelta(minutes=minutes_ago)
     ).replace(second=0, microsecond=0)
     return {
         "timestamp": minute.isoformat(), "sample_count": 12, "ram_used_gb": 10.0,
@@ -139,7 +139,7 @@ async def test_tasks_endpoint_keeps_its_response_shape(empty_store):
 @pytest.mark.asyncio
 async def test_tasks_endpoint_honours_since_and_until(empty_store):
     empty_store.insert_tasks([recent_row(120, 10.0), recent_row(5, 20.0)])
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(minutes=30)).isoformat()
 
     payload = await get_tasks(n=100, since=cutoff, until=None)
 
@@ -173,11 +173,11 @@ async def test_tasks_series_buckets_carry_every_aggregate(empty_store):
     # Anchor both runs inside one bucket so the assertion below does not depend
     # on where "now" happens to sit relative to a bucket boundary.
     bucket = resolve_range("24h")[2]
-    anchor = datetime.now(timezone.utc) - timedelta(minutes=5)
+    anchor = datetime.now(UTC) - timedelta(minutes=5)
     floor = anchor - timedelta(
         seconds=anchor.timestamp() % bucket, microseconds=anchor.microsecond
     )
-    minutes_ago = (datetime.now(timezone.utc) - floor).total_seconds() / 60
+    minutes_ago = (datetime.now(UTC) - floor).total_seconds() / 60
     empty_store.insert_tasks([
         recent_row(minutes_ago - 1 / 60, 10.0),
         recent_row(minutes_ago - 2 / 60, 20.0),
@@ -202,7 +202,7 @@ async def test_series_falls_back_to_the_default_range(empty_store):
 @pytest.mark.asyncio
 async def test_hardware_series_reads_the_persisted_rollups(empty_store):
     minute = (
-        datetime.now(timezone.utc) - timedelta(minutes=3)
+        datetime.now(UTC) - timedelta(minutes=3)
     ).replace(second=0, microsecond=0)
     empty_store.upsert_hardware_minute({
         "timestamp": minute.isoformat(), "sample_count": 12, "ram_used_gb": 10.0,

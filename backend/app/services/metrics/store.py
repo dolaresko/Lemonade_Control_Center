@@ -15,7 +15,7 @@ import math
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.config import settings
@@ -48,7 +48,7 @@ def _measurable_rate(rate: float, output_tokens: int) -> float:
         value = float(rate)
     except (TypeError, ValueError):
         return 0.0
-    if value != value or value <= 0.0:  # NaN or nonsense
+    if math.isnan(value) or value <= 0.0:  # NaN or nonsense
         return 0.0
     if output_tokens < 2:
         # One token out means no generation interval to measure across.
@@ -411,7 +411,7 @@ class MetricsStore:
         now: datetime | None = None,
     ) -> dict[str, int]:
         """Drop rows past their retention window. Returns rows removed."""
-        moment = now or datetime.now(timezone.utc)
+        moment = now or datetime.now(UTC)
         task_days = (
             task_retention_days
             if task_retention_days is not None
@@ -629,7 +629,7 @@ def _merge_temperatures(rows: list[dict]) -> dict[str, float]:
 
 
 def _iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
 
 def _epoch(timestamp: str) -> float:
@@ -637,9 +637,9 @@ def _epoch(timestamp: str) -> float:
     try:
         parsed = datetime.fromisoformat(timestamp)
     except (TypeError, ValueError):
-        return datetime.now(timezone.utc).timestamp()
+        return datetime.now(UTC).timestamp()
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.timestamp()
 
 

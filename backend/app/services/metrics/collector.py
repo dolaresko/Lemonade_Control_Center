@@ -14,7 +14,7 @@ event loop.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import psutil
 
@@ -137,7 +137,7 @@ async def collect_once() -> dict:
     buffer.append(point)
     await _persist_minute(point)
     latest = buffer.get_latest()
-    for queue in list(_subscribers):
+    for queue in _subscribers:
         try:
             queue.put_nowait(latest)
         except asyncio.QueueFull:
@@ -148,7 +148,7 @@ async def collect_once() -> dict:
 async def _persist_minute(point: DataPoint) -> None:
     """Fold one live sample into the persisted per-minute rollup."""
     global _minute
-    minute_start = point.timestamp.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    minute_start = point.timestamp.astimezone(UTC).replace(second=0, microsecond=0)
     # The lock spans the write too: the endpoints can call collect_once()
     # alongside the loop, and an out-of-order upsert would drop a sample.
     async with _minute_lock:
@@ -261,7 +261,7 @@ def _sample() -> DataPoint:
         pass
 
     return DataPoint(
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         ram_used_gb=memory.used / (1024**3),
         ram_total_gb=memory.total / (1024**3),
         ram_percent=memory.percent,

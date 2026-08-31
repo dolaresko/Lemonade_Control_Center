@@ -13,17 +13,16 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.models.schemas import (
-    LogEntry,
-    LogEntryLevel,
-    LastTaskStats,
     FinishReason,
     FinishReasonConfidence,
+    LastTaskStats,
+    LogEntry,
+    LogEntryLevel,
     RecentLogsResponse,
 )
-
 
 # ── Regex patterns for llama-server log parsing ────────────
 
@@ -100,7 +99,8 @@ def get_recent_logs(
         result = subprocess.run(
             ["journalctl", "-u", service, "-n", str(n_lines),
              "-o", "cat", "--no-pager"],
-            capture_output=True, text=True, timeout=timeout
+            capture_output=True, text=True, timeout=timeout,
+        check=False,
         )
         if result.returncode != 0:
             return RecentLogsResponse(entries=[], total_lines=0, source="error")
@@ -143,6 +143,7 @@ def get_logs_for_window(
             capture_output=True,
             text=True,
             timeout=timeout,
+            check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return RecentLogsResponse(entries=[], total_lines=0, source="unavailable")
@@ -171,8 +172,8 @@ def get_logs_for_window(
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _journal_timestamp(value: object) -> str | None:
@@ -180,7 +181,7 @@ def _journal_timestamp(value: object) -> str | None:
         microseconds = int(str(value))
     except (TypeError, ValueError):
         return None
-    return datetime.fromtimestamp(microseconds / 1_000_000, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(microseconds / 1_000_000, tz=UTC).isoformat()
 
 
 def parse_last_task(
@@ -194,7 +195,8 @@ def parse_last_task(
         result = subprocess.run(
             ["journalctl", "-u", service, "-n", str(n_lines),
              "-o", "cat", "--no-pager"],
-            capture_output=True, text=True, timeout=timeout
+            capture_output=True, text=True, timeout=timeout,
+        check=False,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return LastTaskStats(available=False)
@@ -422,7 +424,8 @@ def parse_task_records(
         result = subprocess.run(
             ["journalctl", "-u", service, "-n", str(n_lines),
              "-o", "cat", "--no-pager"],
-            capture_output=True, text=True, timeout=timeout
+            capture_output=True, text=True, timeout=timeout,
+            check=False,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return []
@@ -510,7 +513,7 @@ def _build_task_record(pending: dict[str, object]) -> TaskTelemetryRecord | None
 
     timestamp = pending.get("timestamp")
     if not isinstance(timestamp, str) or not timestamp:
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(UTC).isoformat()
 
     model = pending.get("model")
 
