@@ -1,6 +1,7 @@
 <!--
-  ModalFrame — Local M5-only modal wrapper.
-  Not a global UI primitive, not shadcn, not bits-ui.
+  ModalFrame — the app's modal wrapper. Plain Svelte, not shadcn, not bits-ui.
+  Started life alongside the M5 model dialogs; every confirmation since has
+  reused it, so a new one should reach for this rather than window.confirm.
 -->
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';

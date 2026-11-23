@@ -33,14 +33,21 @@ import type {
   BenchStoredResult,
   BenchSuite,
   DiagnosticReport,
+  HardwareSeriesBucket,
+  HistoryRange,
   MetricPoint,
   ModelProfiles,
   Profile,
   ProfileConfig,
   SmartRecommendation,
   RunEvidenceSeed,
+  MetricsClearResponse,
+  MetricsHistorySummary,
+  SeriesResponse,
   SmokeTestResponse,
   TaskRecord,
+  TaskScaleResponse,
+  TaskSeriesBucket,
   TelemetrySnapshot,
   IntakeProfileResponse,
   IntakeReport,
@@ -294,9 +301,41 @@ export const api = {
     history: (minutes = 30) => get<{ points: MetricPoint[]; total: number; retention_minutes: number }>(`/metrics/history?minutes=${minutes}`),
     latest: () => get<{ point: MetricPoint | null }>('/metrics/latest'),
     tasks: (n = 20) => get<{ tasks: TaskRecord[] }>(`/metrics/tasks?n=${n}`),
-    /** 'buffer' empties the live ring buffer only; the persisted history stays. */
-    clear: (scope: 'buffer') => post<{ cleared: boolean; scope: string }>(`/metrics/clear?scope=${scope}`),
-    tasksCsvUrl: () => `${BASE}${withLccKey('/metrics/tasks/csv')}`,
+    /**
+     * Individual runs inside a window, oldest first.
+     *
+     * URLSearchParams is not optional here: an ISO timestamp carries a "+00:00"
+     * offset, and a raw "+" in a query string decodes as a space, which the
+     * backend then rejects as an unparseable boundary.
+     */
+    tasksWindow: (options: { since?: string; until?: string; n?: number } = {}) => {
+      const query = new URLSearchParams({ n: String(options.n ?? 1000) });
+      if (options.since) query.set('since', options.since);
+      if (options.until) query.set('until', options.until);
+      return get<{ tasks: TaskRecord[] }>(`/metrics/tasks?${query.toString()}`);
+    },
+    taskSeries: (range: HistoryRange) =>
+      get<SeriesResponse<TaskSeriesBucket>>(`/metrics/tasks/series?range=${range}`),
+    hardwareSeries: (range: HistoryRange) =>
+      get<SeriesResponse<HardwareSeriesBucket>>(`/metrics/hardware/series?range=${range}`),
+    /**
+     * The scatter's fixed size ceiling, as one number.
+     *
+     * Deliberately not derived client-side any more: doing that meant pulling
+     * a whole 30d of runs down on every load purely to reduce them to a p95.
+     */
+    taskScale: (range: HistoryRange = '30d', quantile = 0.95) =>
+      get<TaskScaleResponse>(`/metrics/tasks/scale?range=${range}&quantile=${quantile}`),
+    historySummary: () => get<MetricsHistorySummary>('/metrics/history/summary'),
+    /**
+     * `scope` is required by the backend: 'buffer' empties the live ring only,
+     * 'history' additionally drops the persisted tables. Omitting it is a 400,
+     * not a wipe.
+     */
+    clear: (scope: 'buffer' | 'history') =>
+      post<MetricsClearResponse>(`/metrics/clear?scope=${scope}`),
+    tasksCsvUrl: (range?: HistoryRange) =>
+      `${BASE}${withLccKey(`/metrics/tasks/csv${range ? `?range=${range}` : ''}`)}`,
   },
 
   // ── Bench Lab (M13, backend-gated) ──
